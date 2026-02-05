@@ -1,71 +1,81 @@
-# Estonia Business Registry Tools
+# Estonian Business Registry CLI
 
-This project contains tools to merge and search the Estonian Business Registry Open Data.
+A high-performance, memory-efficient tool for downloading, merging, searching, and enriching the Estonian Business Registry open data.
 
-## Scripts
+## Features
 
-### 0. `download_data.py`
-Automates the downloading of the latest raw data files from the Estonian Business Register.
-- **Source:** [e-Business Register Open Data](https://avaandmed.ariregister.rik.ee/en/downloading-open-data)
-- **Usage:**
-  ```bash
-  python3 download_data.py
-  ```
+- **Parallel & Incremental Downloads**: Fetches all registry files simultaneously. Skips files that haven't changed on the server.
+- **SQLite Support (Optional)**: Migrate to a local database for 100x faster searches and more reliable enrichment.
+- **Streaming Merge**: Processes large JSON files using streaming I/O to maintain a low memory footprint.
+- **Advanced Search**: Filter by name, registry code, location (city/county), status, or even persons (ID/Name).
+- **PDF Enrichment**: Automatically downloads and parses official Registry Card PDFs to extract management board details and personal IDs.
+- **Interactive TUI**: A beautiful terminal user interface for browsing and searching the registry interactively.
+- **Exporting**: Save search results to JSON or CSV for external analysis.
 
-### 1. `merge_registry.py`
-Merges the individual raw data files (ZIP archives) provided by the business registry into a single, unified JSON file (`merged_registry.json`).
-- **Input:** Zip files in the root directory (e.g., `ettevotja_rekvisiidid__yldandmed.json.zip`).
-- **Output:** `merged_registry.json` (approx. 5-6 GB).
-- **Usage:**
-  ```bash
-  python3 merge_registry.py
-  ```
+## Prerequisites
 
-### 2. `search_registry_fast.py` (Recommended)
-A high-performance search tool that uses **memory mapping** to instantly search the large `merged_registry.json` file without loading it entirely into RAM.
-- **Features:**
-  - Instant lookup by Registry Code.
-  - Fast free-text search by Company Name.
-  - Low memory usage.
-- **Usage:**
-  ```bash
-  # Search by Registry Code
-  python3 search_registry_fast.py 10000018
+- **Python 3.12+**
+- **uv**: Recommended for dependency management.
+- **jq** (Optional): Dramatically reduces RAM usage during the merge process.
 
-  # Search by Name
-  python3 search_registry_fast.py "Amserv Auto"
-  ```
+## Installation
 
-### 3. `search_registry.py` (Legacy)
-A slower, streaming-based search implementation. Useful if memory mapping is not supported on your system or for debugging.
-- **Usage:**
-  ```bash
-  python3 search_registry.py "Search Term"
-  ```
+```bash
+git clone https://github.com/your-repo/estonia-registry.git
+cd estonia-registry
+uv sync
+```
 
-### 4. `view_head.py`
-An interactive utility to view the first few records of `merged_registry.json`. It decodes and pretty-prints JSON objects in batches, asking the user if they want to see more.
-- **Usage:**
-  ```bash
-  python3 view_head.py
-  ```
+## Usage
 
-## Data Source
-The data is sourced from the Estonian Business Register (e-Business Register) open data.
-Expected input files:
-- `ettevotja_rekvisiidid__yldandmed.json.zip`
-- `ettevotja_rekvisiidid__osanikud.json.zip`
-- `ettevotja_rekvisiidid__kasusaajad.json.zip`
-- `ettevotja_rekvisiidid__kaardile_kantud_isikud.json.zip`
-- `ettevotja_rekvisiidid__registrikaardid.json.zip`
-- `ettevotja_rekvisiidid__lihtandmed.csv.zip`
+### 1. Synchronize Data
+Downloads updates (if available) and merges them:
+```bash
+uv run registry.py sync
+```
 
-## Requirements
-- Python 3.6+
-- No external dependencies (uses standard library `json`, `mmap`, `csv`, `zipfile`).
+### 2. Search & Export
+```bash
+# Search for a person across all companies
+uv run registry.py search -p "Tony Benoy"
 
-## Disclaimer
-This project is for informational purposes only. The author takes no responsibility for how the data obtained through these tools is used, its accuracy, or any consequences resulting from its use. Users are responsible for complying with the terms of service of the Estonian Business Register and all applicable laws and regulations.
+# Filter by location and status, then export to CSV
+uv run registry.py search -l "Harju" -s "Registrisse kantud" --export harju_companies.csv
+
+# Search by code (instant jump via index)
+uv run registry.py search -c 16631240
+```
+
+### 3. Interactive TUI
+Launch the terminal explorer:
+```bash
+uv run registry.py ui
+```
+*Controls: `s` to focus search, `Enter` to search, `Arrows` to navigate, `Esc` to exit details.*
+
+### 4. Enrichment
+```bash
+# Enrich specific companies (limit 10 per run)
+uv run registry.py enrich 16631240
+```
+
+### 5. Statistics
+```bash
+uv run registry.py stats
+```
+
+## Database Backend (Optional)
+For much faster performance, you can use SQLite:
+1. Initialize the database during merge:
+   ```bash
+   uv run registry.py merge --use-db
+   ```
+2. Subsequent commands will automatically detect `registry.db` and use it for instant searches.
+
+## Data Structure
+The tool creates a `chunks/` directory:
+- `chunk_XXX.json`: Compressed company records.
+- `manifest.json`: Index for instant lookups by registry code.
 
 ## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT

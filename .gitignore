@@ -3,11 +3,13 @@
 *.json
 *.csv
 extracted/
+chunks/
 
 # Python
 __pycache__/
 *.pyc
 .mypy_cache/
+.venv/
 
 # Editor/IDE
 .vscode/
