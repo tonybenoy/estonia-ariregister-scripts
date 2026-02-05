@@ -1,17 +1,58 @@
-# Data files
-*.zip
-*.json
-*.csv
-extracted/
-chunks/
+# Data & Database
+data/
+*.db
+*.db-journal
+*.sqlite3
 
 # Python
 __pycache__/
-*.pyc
-.mypy_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 .venv/
+venv/
+ENV/
 
-# Editor/IDE
+# Testing & Linting
+.mypy_cache/
+.pytest_cache/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Environment & Secrets
+.env
+.venv
+env.bak
+venv.bak
+
+# IDEs & Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 .claude/
+
+# Operating System
+.DS_Store
+Thumbs.db
