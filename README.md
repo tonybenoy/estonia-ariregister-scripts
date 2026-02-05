@@ -9,7 +9,6 @@ A high-performance, memory-efficient tool for downloading, merging, searching, a
 - **Streaming Merge**: Processes large JSON files using streaming I/O to maintain a low memory footprint.
 - **Advanced Search**: Filter by name, registry code, location (city/county), status, or even persons (ID/Name).
 - **PDF Enrichment**: Automatically downloads and parses official Registry Card PDFs to extract management board details and personal IDs.
-- **Interactive TUI**: A beautiful terminal user interface for browsing and searching the registry interactively.
 - **Exporting**: Save search results to JSON or CSV for external analysis.
 
 ## Prerequisites
@@ -44,24 +43,42 @@ uv run registry.py search -l "Harju" -s "Registrisse kantud" --export harju_comp
 
 # Search by code (instant jump via index)
 uv run registry.py search -c 16631240
+
+# Translate results to English
+uv run registry.py search -n "Bolt" --translate
 ```
 
-### 3. Interactive TUI
-Launch the terminal explorer:
-```bash
-uv run registry.py ui
-```
-*Controls: `s` to focus search, `Enter` to search, `Arrows` to navigate, `Esc` to exit details.*
-
-### 4. Enrichment
+### 3. Enrichment
 ```bash
 # Enrich specific companies (limit 10 per run)
 uv run registry.py enrich 16631240
 ```
 
-### 5. Statistics
+### 4. Statistics
 ```bash
 uv run registry.py stats
+```
+
+## SDK Usage
+
+You can also use the registry logic directly in your own Python code:
+
+```python
+from registry import EstonianRegistry
+
+# Initialize the registry (defaults to 'data' directory)
+reg = EstonianRegistry()
+
+# Search for a company
+results = reg.search(term="Bolt", translate=True)
+
+for company in results:
+    print(f"{company['name']} ({company['registry_code']})")
+    print(f"Status: {company['status']}")
+
+# Get analytics
+stats = reg.get_analytics()
+print(f"Total companies: {stats['total']}")
 ```
 
 ## Database Backend (Optional)
