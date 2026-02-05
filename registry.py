@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Estonian Registry CLI - High Performance, Beautiful & Multi-Backend
+Estonian Registry CLI - High Performance, Beautiful & Exhaustive
 """
 
 import argparse
@@ -56,56 +56,131 @@ def setup_logging(verbose: bool = False):
     logger.addHandler(handler)
     logger.setLevel(level)
 
+# Comprehensive Translation Map
 TRANSLATIONS = {
-    "ariregistri_kood": "registry_code", "nimi": "name", "staatus": "status",
-    "aadress_maakond": "county", "aadress_linn": "city", "ettevotja_aadress": "address",
-    "asukoht_ettevotja_aadressis": "location_in_address", "asukoha_ehak_kood": "location_ehak_code",
-    "asukoha_ehak_tekstina": "location_description", "indeks_ettevotja_aadressis": "postal_code",
-    "ettevotja_oiguslik_vorm": "legal_form", "ettevotja_oigusliku_vormi_alaliik": "legal_form_subtype",
-    "ettevotja_staatus": "company_status", "ettevotja_staatus_tekstina": "status_description",
-    "esmakande_kuupaev": "incorporation_date", "ettevotja_esmakande_kpv": "incorporation_date",
-    "kustutamise_kuupaev": "deletion_date", "osanikud": "shareholders", "kasusaajad": "beneficiaries",
-    "isikud": "persons", "kaardid": "registry_cards", "isikukood_registrikood": "id_code",
-    "isikukood_hash": "id_hash", "nimi_arinimi": "name_legal_name", "isiku_roll": "role",
-    "isiku_roll_tekstina": "role_description", "isiku_aadress": "person_address",
-    "osathtede_arv": "shares_count", "osamaksu_summa": "contribution_amount", "valuuta": "currency",
-    "osaluse_protsent": "ownership_percentage", "kontrolli_liik": "control_type", "yldandmed": "general_data",
-    "kapitalid": "capital", "kapitali_suurus": "capital_amount", "kapitali_valuuta": "capital_currency",
-    "sidevahendid": "contacts", "liik_tekstina": "type_description", "sisu": "content",
-    "teatatud_tegevusalad": "activities", "emtak_kood": "emtak_code", "emtak_tekstina": "activity_description",
-    "on_pohitegevusala": "is_main_activity", "info_majandusaasta_aruannetest": "annual_reports",
-    "majandusaasta_perioodi_lopp_kpv": "period_end_date", "tootajate_arv": "employee_count",
-    "registrikaardid": "registry_entries", "kanded": "entries", "kandeliik_tekstina": "entry_type",
-    "kpv": "date", "kande_nr": "entry_number", "kaardi_piirkond": "card_region", "kaardi_nr": "card_number",
-    "kaardi_tyyp": "card_type", "eesnimi": "first_name", "isiku_nimi": "person_name",
-    "kontrolli_teostamise_viis_tekstina": "control_method", "aadress_riik_tekstina": "country",
-    "ads_normaliseeritud_taisaadress": "normalized_address", "teabesysteemi_link": "portal_link",
-    "algus_kpv": "start_date", "lopp_kpv": "end_date", "esindusoiguse_normaalregulatsioonid": "standard_representation_rights",
-    "esindusoiguse_eritingimused": "special_representation_rights", "markused_kaardil": "registry_annotations",
-    "oigusjargsused": "succession_mergers", "staatused": "status_history", "arinimed": "name_history",
-    "aadressid": "address_history", "oiguslikud_vormid": "legal_form_history", "kapitalid": "capital_history",
-    "enrichment": "enrichment", "processed_at": "processed_at", "unmasked_ids": "unmasked_ids",
-    "tegutseb_tekstina": "is_active", "on_raamatupidamiskohustuslane": "is_accounting_obligated",
+    "ariregistri_kood": "registry_code",
+    "nimi": "name",
+    "staatus": "status",
+    "aadress_maakond": "county",
+    "aadress_linn": "city",
+    "ettevotja_aadress": "address",
+    "asukoht_ettevotja_aadressis": "location_in_address",
+    "asukoha_ehak_kood": "location_ehak_code",
+    "asukoha_ehak_tekstina": "location_description",
+    "indeks_ettevotja_aadressis": "postal_code",
+    "ettevotja_oiguslik_vorm": "legal_form",
+    "ettevotja_oigusliku_vormi_alaliik": "legal_form_subtype",
+    "ettevotja_staatus": "company_status",
+    "ettevotja_staatus_tekstina": "status_description",
+    "esmakande_kuupaev": "incorporation_date",
+    "ettevotja_esmakande_kpv": "incorporation_date",
+    "kustutamise_kuupaev": "deletion_date",
+    "osanikud": "shareholders",
+    "kasusaajad": "beneficiaries",
+    "isikud": "persons",
+    "kaardid": "registry_cards",
+    "isikukood_registrikood": "id_code",
+    "isikukood_hash": "id_hash",
+    "nimi_arinimi": "name_legal_name",
+    "isiku_roll": "role",
+    "isiku_roll_tekstina": "role_description",
+    "isiku_aadress": "person_address",
+    "osathtede_arv": "shares_count",
+    "osamaksu_summa": "contribution_amount",
+    "valuuta": "currency",
+    "osaluse_protsent": "ownership_percentage",
+    "kontrolli_liik": "control_type",
+    "yldandmed": "general_data",
+    "kapitalid": "capital",
+    "kapitali_suurus": "capital_amount",
+    "kapitali_valuuta": "capital_currency",
+    "sidevahendid": "contacts",
+    "liik_tekstina": "type_description",
+    "sisu": "content",
+    "teatatud_tegevusalad": "activities",
+    "emtak_kood": "emtak_code",
+    "emtak_tekstina": "activity_description",
+    "on_pohitegevusala": "is_main_activity",
+    "info_majandusaasta_aruannetest": "annual_reports",
+    "majandusaasta_perioodi_lopp_kpv": "period_end_date",
+    "tootajate_arv": "employee_count",
+    "registrikaardid": "registry_entries",
+    "kanded": "entries",
+    "kandeliik_tekstina": "entry_type",
+    "kpv": "date",
+    "kande_nr": "entry_number",
+    "kaardi_piirkond": "card_region",
+    "kaardi_nr": "card_number",
+    "kaardi_tyyp": "card_type",
+    "eesnimi": "first_name",
+    "isiku_nimi": "person_name",
+    "kontrolli_teostamise_viis_tekstina": "control_method",
+    "aadress_riik_tekstina": "country",
+    "ads_normaliseeritud_taisaadress": "normalized_address",
+    "teabesysteemi_link": "portal_link",
+    "algus_kpv": "start_date",
+    "lopp_kpv": "end_date",
+    "esindusoiguse_normaalregulatsioonid": "standard_representation_rights",
+    "esindusoiguse_eritingimused": "special_representation_rights",
+    "markused_kaardil": "registry_annotations",
+    "oigusjargsused": "succession_mergers",
+    "staatused": "status_history",
+    "arinimed": "name_history",
+    "aadressid": "address_history",
+    "oiguslikud_vormid": "legal_form_history",
+    "kapitalid": "capital_history",
+    "enrichment": "enrichment",
+    "processed_at": "processed_at",
+    "unmasked_ids": "unmasked_ids",
+    "tegutseb_tekstina": "is_active",
+    "on_raamatupidamiskohustuslane": "is_accounting_obligated",
 }
 
 VALUE_TRANSLATIONS = {
-    "Registrisse kantud": "Entered into register", "Kustutatud": "Deleted", "Likvideerimisel": "In liquidation",
-    "Pankrotis": "Bankrupt", "Hoiatuskandega": "With warning entry", "Registrist kustutatud": "Deleted from register",
-    "Osaühing": "Private limited company", "Aktsiaselts": "Public limited company",
-    "Füüsilisest isikust ettevõtja": "Sole proprietor", "Mittetulundusühing": "Non-profit association",
-    "Täisühing": "General partnership", "Usaldusühing": "Limited partnership",
-    "Korteriühistu": "Apartment association", "Sihtasutus": "Foundation", "OÜ": "PLC", "AS": "JSC",
-    "Juhatuse liige": "Management board member", "Osanik": "Shareholder", "Asutaja": "Founder",
-    "Prokurist": "Proxy holder", "Likvideerija": "Liquidator", "Pankrotihaldur": "Trustee in bankruptcy",
-    "Täisosanik": "General partner", "Usaldusosanik": "Limited partner", "otsene osalus": "direct ownership",
-    "kaudne osalus": "indirect ownership", "muu kontrolli viis": "other form of control",
-    "Esmakanne": "First entry", "Muutmiskanne": "Change entry", "Lõpetamiskanne": "Termination entry",
-    "Tegevuse jätkamise kanne": "Continuation of activities entry", "Märkus": "Note",
-    "Kapitali muutmise kanne": "Capital change entry", "Ärinime muutmise kanne": "Name change entry",
-    "Asutamiskanne": "Founding entry", "Elektronposti aadress": "Email address", "Mobiiltelefon": "Mobile phone",
-    "Telefon": "Telephone", "Interneti WWW aadress": "Website", "Faks": "Fax",
-    "Programmeerimine": "Programming", "Mootorsõidukite jaemüük": "Retail sale of motor vehicles",
-    "Jah": "Yes", "Ei": "No",
+    "Registrisse kantud": "Entered into register",
+    "Kustutatud": "Deleted",
+    "Likvideerimisel": "In liquidation",
+    "Pankrotis": "Bankrupt",
+    "Hoiatuskandega": "With warning entry",
+    "Registrist kustutatud": "Deleted from register",
+    "Osaühing": "Private limited company",
+    "Aktsiaselts": "Public limited company",
+    "Füüsilisest isikust ettevõtja": "Sole proprietor",
+    "Mittetulundusühing": "Non-profit association",
+    "Täisühing": "General partnership",
+    "Usaldusühing": "Limited partnership",
+    "Korteriühistu": "Apartment association",
+    "Sihtasutus": "Foundation",
+    "OÜ": "PLC",
+    "AS": "JSC",
+    "Juhatuse liige": "Management board member",
+    "Osanik": "Shareholder",
+    "Asutaja": "Founder",
+    "Prokurist": "Proxy holder",
+    "Likvideerija": "Liquidator",
+    "Pankrotihaldur": "Trustee in bankruptcy",
+    "Täisosanik": "General partner",
+    "Usaldusosanik": "Limited partner",
+    "otsene osalus": "direct ownership",
+    "kaudne osalus": "indirect ownership",
+    "muu kontrolli viis": "other form of control",
+    "Esmakanne": "First entry",
+    "Muutmiskanne": "Change entry",
+    "Lõpetamiskanne": "Termination entry",
+    "Tegevuse jätkamise kanne": "Continuation of activities entry",
+    "Märkus": "Note",
+    "Kapitali muutmise kanne": "Capital change entry",
+    "Ärinime muutmise kanne": "Name change entry",
+    "Asutamiskanne": "Founding entry",
+    "Elektronposti aadress": "Email address",
+    "Mobiiltelefon": "Mobile phone",
+    "Telefon": "Telephone",
+    "Interneti WWW aadress": "Website",
+    "Faks": "Fax",
+    "Programmeerimine": "Programming",
+    "Mootorsõidukite jaemüük": "Retail sale of motor vehicles",
+    "Jah": "Yes",
+    "Ei": "No",
     "Osaühingut võib kõikide tehingute tegemisel esindada iga juhatuse liige.": "The private limited company may be represented by any member of the management board in all transactions.",
 }
 
@@ -160,7 +235,6 @@ def translate_item(item, to_en=False):
 # ============================================================
 
 class RegistryBackend(ABC):
-    """Abstract Base Class for all database backends."""
     @abstractmethod
     def insert_batch_base(self, batch): pass
     @abstractmethod
@@ -260,17 +334,20 @@ class EstonianRegistry:
         "ettevotja_rekvisiidid__kaardile_kantud_isikud.json.zip", "ettevotja_rekvisiidid__registrikaardid.json.zip",
     ]
 
-    def __init__(self, data_dir="data", chunk_size=50000, backend: RegistryBackend = None):
+    def __init__(self, data_dir="data", chunk_size=50000, backend: RegistryBackend = None, use_db=True):
         self.data_dir = Path(data_dir); self.download_dir = self.data_dir / "downloads"
         self.extracted_dir = self.data_dir / "extracted"; self.db_path = self.data_dir / "registry.db"
         for d in [self.download_dir, self.extracted_dir]: d.mkdir(parents=True, exist_ok=True)
-        self.db = backend or SQLiteBackend(self.db_path); self.chunk_size = chunk_size
+        self.chunk_size = chunk_size
+        if not use_db: self.db = None
+        else: self.db = backend or SQLiteBackend(self.db_path)
 
     def sync(self, force=False):
         Downloader(self.download_dir, self.DATA_FILES).run()
         self.merge(force=force)
 
     def merge(self, force=False):
+        if not self.db: return
         logger.info("Starting Merge...")
         extracted = {}
         for f in self.DATA_FILES:
@@ -288,25 +365,29 @@ class EstonianRegistry:
                     for row in csv.DictReader(csvf, delimiter=';'):
                         if row.get('ariregistri_kood'):
                             row['ariregistri_kood'] = int(row['ariregistri_kood']); batch.append(row)
-                        if len(batch) >= self.chunk_size: self.db.insert_batch_base(batch); batch = []
+                        if len(batch) >= self.chunk_size:
+                            self.db.insert_batch_base(batch); batch = []
                 if batch: self.db.insert_batch_base(batch)
             elif 'yldandmed' in f:
                 batch = []
                 for item in iter_json_array(path):
                     if item.get('ariregistri_kood'):
                         item['ariregistri_kood'] = int(item['ariregistri_kood']); batch.append(item)
-                    if len(batch) >= self.chunk_size: self.db.update_batch_general(batch); batch = []
+                    if len(batch) >= self.chunk_size:
+                        self.db.update_batch_general(batch); batch = []
                 if batch: self.db.update_batch_general(batch)
             else:
                 key = f.split('__')[-1].split('.')[0]; groups = defaultdict(list); count = 0
                 for item in iter_json_array(path):
                     code = item.get('ariregistri_kood')
                     if code: groups[int(code)].append(item.get(key, item)); count += 1
-                    if count >= self.chunk_size: self.db.update_batch_json(key, groups); groups = defaultdict(list); count = 0
+                    if count >= self.chunk_size:
+                        self.db.update_batch_json(key, groups); groups = defaultdict(list); count = 0
                 if groups: self.db.update_batch_json(key, groups)
             self.db.mark_file_status(f, 'DONE'); self.db.commit()
 
     def enrich(self, codes: list[str]):
+        if not self.db: return
         for code_str in codes:
             try:
                 code = int(code_str); console.print(f"[info]Enriching {code}...[/info]")
@@ -317,6 +398,7 @@ class EstonianRegistry:
             except Exception as e: logger.error(f"Error enriching {code_str}: {e}")
 
     def export(self, output_path: Path, translate: bool = False):
+        if not self.db: return
         logger.info(f"Exporting to {output_path}...")
         results = []
         for row in self.db.search(limit=None):
@@ -403,6 +485,12 @@ def display_company(item, sections=None, lang="et"):
             elif isinstance(entry, dict) and key in entry: flat.extend(entry[key])
             else: flat.append(entry)
         return flat
+    def format_dict(d, indent=4, exclude=None):
+        exclude = exclude or []; res = []
+        for k, v in d.items():
+            if k in exclude or isinstance(v, (list, dict)): continue 
+            res.append(f"{' '*indent}\033[1m{TRANSLATIONS.get(k, k) if to_en else k}:\033[0m {translate_value(v, to_en)}")
+        return res
     def resolve_id(p):
         raw = p.get('isikukood_registrikood') or p.get('isikukood')
         if raw: return str(raw)
@@ -475,7 +563,8 @@ def display_company(item, sections=None, lang="et"):
         c2 = Table(title=lbl["reports"], box=box.SIMPLE); c2.add_column(lbl["period_end"]); c2.add_column(lbl["employees"]); c2.add_column(lbl["activity"])
         for r in r_l: c2.add_row(r.get('majandusaasta_perioodi_lopp_kpv', 'N/A'), str(r.get('tootajate_arv', '0')), translate_value(r.get('tegevusala_emtak_tekstina', 'N/A'), to_en))
         c3 = Table(title=lbl["contacts"], box=box.SIMPLE); c3.add_column(lbl["type"]); c3.add_column(lbl["val"])
-        for s in side: c3.add_row(translate_value(s.get('liik_tekstina', 'Contact'), to_en), s.get('sisu')); console.print(Columns([c1, c2, c3], expand=True))
+        for s in side: c3.add_row(translate_value(s.get('liik_tekstina', 'Contact'), to_en), s.get('sisu'))
+        console.print(Columns([c1, c2, c3], expand=True))
     if "registry" in sections:
         t = Table(title=lbl["registry"], box=box.ROUNDED, header_style="bold yellow", expand=True)
         t.add_column(lbl["date"], style="cyan"); t.add_column(lbl["entry_type"]); t.add_column(lbl["entry_num"], justify="right")
@@ -502,14 +591,12 @@ def main():
     for s in ["core", "general", "history", "personnel", "ownership", "beneficiaries", "operations", "registry", "enrichment"]:
         srch.add_argument(f"--{s}", action="append_const", dest="sections", const=s)
     args = parser.parse_args(); setup_logging(args.verbose); reg = EstonianRegistry(use_db=not args.no_db)
-    
-    et_cmds = ["otsi", "rikasta", "ühenda", "sünk", "ekspordi"]
+    et_cmds = ["otsi", "rikasta", "ühenda", "sünk", "ekspordi", "otsi", "sünk", "ühenda", "rikasta", "ekspordi"]
     en_cmds = ["search", "enrich", "merge", "sync", "export"]
     cmd_typed = sys.argv[1] if len(sys.argv) > 1 else ""
     if args.en: lang = "en"
     elif args.ee: lang = "et"
     else: lang = "et" if (cmd_typed in et_cmds or (cmd_typed not in en_cmds and cmd_typed != "")) else "en"
-
     if args.cmd in ["sync", "sünk"]: reg.sync(force=args.force)
     elif args.cmd in ["merge", "ühenda"]: reg.merge(force=args.force)
     elif args.cmd in ["enrich", "rikasta"]: reg.enrich(args.codes)

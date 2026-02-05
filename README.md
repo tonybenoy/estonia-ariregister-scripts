@@ -137,6 +137,14 @@ uv run registry.py export dump.json
 uv run registry.py ekspordi dump.json
 ```
 
+## Multi-Backend Architecture
+The tool is designed to be database-agnostic. It uses an abstract `RegistryBackend` interface, allowing for easy expansion to other databases (e.g., PostgreSQL, MongoDB). 
+
+To add a new backend:
+1. Subclass `RegistryBackend` in `registry.py`.
+2. Implement the abstract methods (search, insert, etc.).
+3. Pass your new backend instance to the `EstonianRegistry` constructor.
+
 ## Available Sections
 - `--core`: Technical metadata and IDs.
 - `--general`: Registry-wide attributes and flags.
