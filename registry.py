@@ -115,7 +115,7 @@ VALUE_TRANSLATIONS = {
 }
 
 def translate_item(item):
-    """Recursively translate keys and common values from Estonian to English."""
+    """Recursively translate keys and common values from Estonian to English, keeping original terms in brackets."""
     if isinstance(item, list):
         return [translate_item(i) for i in item]
     if isinstance(item, dict):
@@ -125,7 +125,10 @@ def translate_item(item):
             new_item[translated_key] = translate_item(v)
         return new_item
     if isinstance(item, str):
-        return VALUE_TRANSLATIONS.get(item, item)
+        translated_value = VALUE_TRANSLATIONS.get(item)
+        if translated_value:
+            return f"{translated_value} ({item})"
+        return item
     return item
 
 # ============================================================
@@ -609,6 +612,102 @@ config = Config(BASE_DIR / "config.json")
 # Utils
 # ============================================================
 
+def get_dir_size(path: Path):
+    """Calculate total size of a directory in bytes."""
+    return sum(f.stat().st_size for f in path.glob('**/*') if f.is_file())
+
+def download_registry_pdf(code: str):
+    """Download a company's registry PDF from the official portal."""
+    url = f"https://ariregister.rik.ee/eng/company/{code}/registry_card_pdf?registry_card_lang=eng"
+    browser_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': browser_agent})
+        with urllib.request.urlopen(req) as resp:
+            return resp.read()
+    except Exception as e:
+        logger.error(f"Failed to download PDF for {code}: {e}")
+        return b""
+
+def parse_pdf_content(pdf_bytes: bytes):
+    """Extract information from registry PDF bytes."""
+    if not pdf_bytes:
+        return {}
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        full_text = ""
+        for page in reader.pages:
+            full_text += page.extract_text() + "\n"
+        
+        info = {
+            "processed_at": datetime.now().isoformat(),
+            "pages": len(reader.pages),
+            "raw_text_snippet": full_text[:500].replace("\n", " "),
+        }
+        
+        # Simple extraction for some common fields if they exist in the PDF
+        # Note: Registry cards vary in format, but we can try some regex
+        caps_match = re.search(r"Capital:\s*([\d\s,]+)\s*([A-Z]{3})", full_text)
+        if caps_match:
+            info["capital"] = caps_match.group(1).strip()
+            info["currency"] = caps_match.group(2)
+            
+        return info
+    except Exception as e:
+        logger.error(f"Error parsing PDF: {e}")
+        return {}
+
+def format_company_card(item):
+    """Format company information into a readable card."""
+    # Determine which keys to use (handle both Estonian and English if translated)
+    name = item.get('name') or item.get('nimi') or 'Unknown'
+    code = item.get('registry_code') or item.get('ariregistri_kood') or 'Unknown'
+    status = item.get('status_description') or item.get('ettevotja_staatus_tekstina') or 'Unknown'
+    address = item.get('address') or item.get('ads_normaliseeritud_taisaadress') or item.get('ettevotja_aadress') or 'No address'
+    legal_form = item.get('legal_form') or item.get('ettevotja_oiguslik_vorm') or 'Unknown'
+    
+    # Capital info
+    capital_str = "Unknown"
+    yld = item.get('yldandmed', {})
+    if isinstance(yld, dict):
+        caps = yld.get('kapitalid', [])
+        if caps and isinstance(caps, list):
+            cap = caps[0]
+            val = cap.get('kapitali_suurus')
+            curr = cap.get('kapitali_valuuta')
+            if val and curr:
+                capital_str = f"{val} {curr}"
+
+    # Board Members
+    persons = []
+    isikud_list = item.get('isikud', [])
+    if isikud_list and isinstance(isikud_list, list):
+        for entry in isikud_list:
+            sub_list = entry.get('kaardile_kantud_isikud', [])
+            for p in sub_list:
+                p_name = f"{p.get('eesnimi', '')} {p.get('nimi_arinimi', '')}".strip()
+                role = p.get('isiku_roll_tekstina', 'Member')
+                if p_name:
+                    persons.append(f"{p_name} ({role})")
+
+    card = [
+        f"\033[1;34m{name}\033[0m",
+        f"  \033[1mRegistry Code:\033[0m {code}",
+        f"  \033[1mLegal Form:\033[0m    {legal_form}",
+        f"  \033[1mStatus:\033[0m        {status}",
+        f"  \033[1mCapital:\033[0m       {capital_str}",
+        f"  \033[1mAddress:\033[0m       {address}",
+    ]
+    
+    if persons:
+        card.append(f"  \033[1mBoard:\033[0m         {', '.join(persons[:3])}{'...' if len(persons) > 3 else ''}")
+    
+    if item.get('enrichment'):
+        e = item['enrichment']
+        card.append(f"  \033[1mEnrichment:\033[0m    PDF ({e.get('pages', '?')} pgs) processed on {e.get('processed_at', '')[:10]}")
+
+    return "\n".join(card)
+
 def iter_json_array(filepath: Path):
     """Memory-efficient iteration of JSON array objects."""
     jq_path = shutil.which("jq")
@@ -701,17 +800,20 @@ class Downloader:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Estonian Registry CLI")
-    parser.add_argument("--use-db", action="store_true", help="Use SQLite database backend")
-    parser.add_argument("--data-dir", default="data", help="Data directory")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
+    # Common arguments for all commands, allowing them to be used before or after subcommands
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument("--use-db", action="store_true", help="Use SQLite database backend")
+    parent_parser.add_argument("--data-dir", default="data", help="Data directory")
+    parent_parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
+
+    parser = argparse.ArgumentParser(description="Estonian Registry CLI", parents=[parent_parser])
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
-    subparsers.add_parser("download", help="Download data")
-    subparsers.add_parser("merge", help="Merge data")
-    subparsers.add_parser("sync", help="Download and merge")
+    subparsers.add_parser("download", help="Download data", parents=[parent_parser])
+    subparsers.add_parser("merge", help="Merge data", parents=[parent_parser])
+    subparsers.add_parser("sync", help="Download and merge", parents=[parent_parser])
     
-    p_search = subparsers.add_parser("search", help="Search companies")
+    p_search = subparsers.add_parser("search", help="Search companies", parents=[parent_parser])
     p_search.add_argument("term", nargs="?", help="Search term")
     p_search.add_argument("-n", "--name", action="store_true", help="Search by name")
     p_search.add_argument("-c", "--code", action="store_true", help="Search by code")
@@ -722,16 +824,16 @@ def main():
     p_search.add_argument("-t", "--translate", action="store_true", help="Translate keys and values to English")
     p_search.add_argument("--limit", type=int, help="Limit number of results")
 
-    p_enrich = subparsers.add_parser("enrich", help="Enrich companies")
+    p_enrich = subparsers.add_parser("enrich", help="Enrich companies", parents=[parent_parser])
     p_enrich.add_argument("codes", nargs="+", help="Registry codes")
 
-    subparsers.add_parser("stats", help="Statistics")
+    subparsers.add_parser("stats", help="Statistics", parents=[parent_parser])
 
-    p_network = subparsers.add_parser("network", help="Find related companies (Network Analysis)")
+    p_network = subparsers.add_parser("network", help="Find related companies (Network Analysis)", parents=[parent_parser])
     p_network.add_argument("code", type=int, help="Registry code to analyze")
     p_network.add_argument("-t", "--translate", action="store_true", help="Translate to English")
 
-    p_config = subparsers.add_parser("config", help="Manage configuration")
+    p_config = subparsers.add_parser("config", help="Manage configuration", parents=[parent_parser])
     p_config.add_argument("action", choices=["show", "set"], help="Action to perform")
     p_config.add_argument("key", nargs="?", help="Config key")
     p_config.add_argument("value", nargs="?", help="Config value")
@@ -783,8 +885,8 @@ def main():
                     json.dump(results, f, ensure_ascii=False, indent=2)
         else:
             for item in results:
-                print("-" * 40)
-                print(json.dumps(item, indent=2, ensure_ascii=False))
+                print("-" * 60)
+                print(format_company_card(item))
             print(f"\nFound {len(results)} results.")
 
     elif args.command == "enrich":
