@@ -1,15 +1,65 @@
+# Eesti Äriregistri CLI / Estonian Business Registry CLI
+
+[Eestikeelne versioon](#eesti-äriregistri-cli) | [English version](#estonian-business-registry-cli-1)
+
+---
+
+# Eesti Äriregistri CLI
+
+Kiire, põhjalik ja visuaalselt selge tööriist Eesti äriregistri avaandmete allalaadimiseks, ühendamiseks, otsimiseks ja rikastamiseks.
+
+## Funktsioonid
+
+- **Paralleelsed ja jätkatavad allalaadimised**: Laeb alla kõik registrifailid korraga, kasutades HTTP Range päiseid katkenud allalaadimiste jätkamiseks.
+- **SQLite arhitektuur (vaikimisi)**: Kasutab kohalikku SQLite andmebaasi kiireteks otsinguteks, keerukateks filtriteks ja andmete rikastamiseks.
+- **Kakskeelne tugi**: Toetus nii eesti- kui ka ingliskeelsetele käskudele ja väljundile. Vaikimisi keel on eesti keel.
+- **Inkrementaalne ja jätkatav andmeühendus**: Töötleb faile kirje haaval koos oleku salvestamisega. Katkestuse korral jätkab sealt, kus pooleli jäi.
+- **Põhjalikud toimikud**: Kuvab kõik registrist kättesaadavad andmed, sh nime/aadressi ajalugu, kapitali muudatused ja tehnilised märkused.
+- **Ilus terminali kasutajaliides**: Kasutab `rich` teeki vormindatud tabelite, ajaloo puude ja süntaksi esiletõstmisega JSON-i jaoks.
+- **Isikukoodide avalikustamine (rikastamine)**: Parsib automaatselt ametlikke registrikaardi PDF-e, et avalikustada isikukoodid, mis on avaandmete failides peidetud (hashitud).
+- **Täpsem otsing**: Otsi nime, asukoha (linn/maakond), staatuse või isiku (nimi/isikukood) järgi.
+- **Sektsioonide filtreerimine**: Vaata toimiku konkreetseid osi (nt ainult omandisuhted või personal), kasutades spetsiaalseid lippe.
+
+## Kasutamine
+
+### 1. Andmete sünkroonimine
+```bash
+uv run registry.py sünk
+```
+
+### 2. Otsing
+```bash
+uv run registry.py otsi "Sunyata"
+```
+
+#### Sektsioonide filtreerimine
+```bash
+# Vaata ainult omandisuhteid ja tegelikke kasusaajaid
+uv run registry.py otsi "Sunyata" --ownership --beneficiaries
+```
+
+### 3. Rikastamine
+```bash
+uv run registry.py rikasta 16631240
+```
+
+---
+
 # Estonian Business Registry CLI
 
-A high-performance, memory-efficient tool for downloading, merging, searching, and enriching the Estonian Business Registry open data.
+A high-performance, exhaustive, and beautiful tool for downloading, merging, searching, and enriching the Estonian Business Registry open data.
 
 ## Features
 
-- **Parallel & Incremental Downloads**: Fetches all registry files simultaneously. Skips files that haven't changed on the server.
-- **SQLite Support (Optional)**: Migrate to a local database for 100x faster searches and more reliable enrichment.
-- **Streaming Merge**: Processes large JSON files using streaming I/O to maintain a low memory footprint.
-- **Advanced Search**: Filter by name, registry code, location (city/county), status, or even persons (ID/Name).
-- **PDF Enrichment**: Automatically downloads and parses official Registry Card PDFs to extract management board details and personal IDs.
-- **Exporting**: Save search results to JSON or CSV for external analysis.
+- **Parallel & Resumable Downloads**: Fetches all registry files simultaneously using HTTP Range headers to resume interrupted downloads.
+- **SQLite Architecture (Default)**: Uses a local SQLite database for instant searches, complex filtering, and reliable data enrichment.
+- **Dual-Language Support**: Support for both Estonian and English commands and output. Default is Estonian.
+- **Incremental & Resumable Merge**: Processes files record-by-record with checkpointing. If interrupted, it picks up exactly where it left off.
+- **Exhaustive Dossiers**: Displays every piece of data from the registry, including name/address history, capital changes, and technical annotations.
+- **Beautiful Terminal UI**: Powered by `rich`, featuring formatted tables, trees for history, and syntax-highlighted JSON.
+- **ID Unmasking (Enrichment)**: Automatically parses official Registry Card PDFs to unmask personal ID codes that are hashed in the bulk open data.
+- **Advanced Search**: Filter by term, location (city/county), status, or persons (Name/ID).
+- **Section Filtering**: View specific parts of a dossier (e.g., just ownership or personnel) using dedicated CLI flags.
 
 ## Prerequisites
 
@@ -27,77 +77,81 @@ uv sync
 
 ## Usage
 
+The tool supports commands in both Estonian and English.
+
 ### 1. Synchronize Data
-Downloads updates (if available) and merges them:
+Downloads updates and merges them incrementally into the local database:
 ```bash
-uv run registry.py sync
+uv run registry.py sync    # English
+uv run registry.py sünk   # Estonian
 ```
 
-### 2. Search & Export
+### 2. Search
+Display a complete dossier for a company:
+```bash
+uv run registry.py search "Sunyata"   # Defaults to English output
+uv run registry.py otsi "Sunyata"    # Defaults to Estonian output
+```
+
+#### Language Overrides
+You can force the language regardless of the command used:
+```bash
+uv run registry.py otsi "Sunyata" --en   # Estonian command, English output
+uv run registry.py search "Sunyata" --ee  # English command, Estonian output
+```
+
+#### Filtering by Section
+Use section flags to isolate specific data points:
+```bash
+# See only ownership and beneficial owners
+uv run registry.py search "Sunyata" --ownership --beneficiaries
+
+# See only historical records (names, addresses, capital)
+uv run registry.py search "Sunyata" --history
+```
+
+#### Advanced Search Filters
 ```bash
 # Search for a person across all companies
 uv run registry.py search -p "Tony Benoy"
 
-# Filter by location and status, then export to CSV
-uv run registry.py search -l "Harju" -s "Registrisse kantud" --export harju_companies.csv
+# Filter by location and status
+uv run registry.py search -l "Harju" -s "Registrisse kantud"
 
-# Search by code (instant jump via index)
-uv run registry.py search -c 16631240
-
-# Translate results to English
-uv run registry.py search -n "Bolt" --translate
+# Output full raw JSON with syntax highlighting
+uv run registry.py search 16631240 --json
 ```
 
-### 3. Enrichment
+### 3. Enrichment (ID Unmasking)
+Unmask personal ID codes by downloading the official PDF:
 ```bash
-# Enrich specific companies (limit 10 per run)
-uv run registry.py enrich 16631240
+# Unmask IDs for a specific company
+uv run registry.py enrich 16631240    # English
+uv run registry.py rikasta 16631240   # Estonian
 ```
 
-### 4. Statistics
+### 4. Exporting
+Export the entire database to a JSON file:
 ```bash
-uv run registry.py stats
+uv run registry.py export dump.json
+uv run registry.py ekspordi dump.json
 ```
 
-## SDK Usage
-
-You can also use the registry logic directly in your own Python code:
-
-```python
-from registry import EstonianRegistry
-
-# Initialize the registry (defaults to 'data' directory)
-reg = EstonianRegistry()
-
-# Search for a company
-results = reg.search(term="Bolt", translate=True)
-
-for company in results:
-    print(f"{company['name']} ({company['registry_code']})")
-    print(f"Status: {company['status']}")
-
-# Get analytics
-stats = reg.get_analytics()
-print(f"Total companies: {stats['total']}")
-```
-
-## Database Backend (Optional)
-For much faster performance, you can use SQLite:
-1. Initialize the database during merge:
-   ```bash
-   uv run registry.py merge --use-db
-   ```
-2. Subsequent commands will automatically detect `registry.db` and use it for instant searches.
-
-## Data Structure
-The tool creates a `chunks/` directory:
-- `chunk_XXX.json`: Compressed company records.
-- `manifest.json`: Index for instant lookups by registry code.
+## Available Sections
+- `--core`: Technical metadata and IDs.
+- `--general`: Registry-wide attributes and flags.
+- `--history`: Chronological logs of names, addresses, and capital.
+- `--personnel`: Board members and signing rights.
+- `--ownership`: Shareholders and share pledges.
+- `--beneficiaries`: Ultimate beneficial owners.
+- `--operations`: EMTAK activities, reports, and contacts.
+- `--registry`: The complete chronological registry card log.
+- `--enrichment`: Data extracted from live PDF cards.
 
 ## License
 MIT
 
-## Disclaimer
+## Disclaimer / Hoiatus
 
 **IMPORTANT: READ CAREFULLY.**
 
