@@ -280,7 +280,8 @@ UI_LABELS = {
         "entry_num": "Nr", "portal_link": "Link registrisse", "privacy_note": "* Eraisikute isikukoodid on avaandmetes peidetud (hash). PDF-i rikastamine unmaskib need.",
         "results_found": "Leitud tulemusi", "no_results": "Tulemusi ei leitud.",
         "analysis_title": "Analüüs", "rank": "Nr", "group": "Grupp", "count": "Arv", "pct": "Osakaal",
-        "analysis_by": {"county": "maakond", "status": "staatus", "legal-form": "õiguslik vorm", "emtak": "EMTAK kood", "year": "asutamisaasta"},
+        "analysis_by": {"county": "maakond", "status": "staatus", "legal-form": "õiguslik vorm", "emtak": "EMTAK kood", "year": "asutamisaasta",
+                        "capital-range": "kapitalivahemik", "employee-range": "tootajate vahemik", "role": "roll", "country": "riik"},
     },
     "en": {
         "dossier": "Dossier", "core": "Core Identity", "enrichment": "Live PDF Enrichment", "general": "General Attributes",
@@ -296,7 +297,8 @@ UI_LABELS = {
         "entry_num": "Number", "portal_link": "Portal Link", "privacy_note": "* Personal ID codes for individuals are hashed in open data. PDF enrichment unmasks them.",
         "results_found": "Found results", "no_results": "No results found.",
         "analysis_title": "Analysis", "rank": "Rank", "group": "Group", "count": "Count", "pct": "Share",
-        "analysis_by": {"county": "County", "status": "Status", "legal-form": "Legal Form", "emtak": "EMTAK Code", "year": "Founding Year"},
+        "analysis_by": {"county": "County", "status": "Status", "legal-form": "Legal Form", "emtak": "EMTAK Code", "year": "Founding Year",
+                        "capital-range": "Capital Range", "employee-range": "Employee Range", "role": "Person Role", "country": "Beneficiary Country"},
     }
 }
 
@@ -351,7 +353,7 @@ class SQLiteBackend(RegistryBackend):
         with self.conn:
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS companies (
-                    code INTEGER PRIMARY KEY, name TEXT, status TEXT, maakond TEXT, linn TEXT, 
+                    code INTEGER PRIMARY KEY, name TEXT, status TEXT, maakond TEXT, linn TEXT,
                     legal_form TEXT, founded_at TEXT, full_data JSON DEFAULT '{}', enrichment JSON
                 )
             """)
@@ -360,6 +362,39 @@ class SQLiteBackend(RegistryBackend):
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_legal_form ON companies(legal_form)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON companies(status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_founded_at ON companies(founded_at)")
+            # New columns (Phase 1)
+            existing = {r[1] for r in self.conn.execute("PRAGMA table_info(companies)").fetchall()}
+            new_cols = [
+                ("capital", "REAL"), ("capital_currency", "TEXT"), ("email", "TEXT"),
+                ("phone", "TEXT"), ("website", "TEXT"), ("employee_count", "INTEGER"),
+                ("vat_number", "TEXT"),
+            ]
+            for col, ctype in new_cols:
+                if col not in existing:
+                    self.conn.execute(f"ALTER TABLE companies ADD COLUMN {col} {ctype}")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_capital ON companies(capital)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_employee_count ON companies(employee_count)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_vat_number ON companies(vat_number)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_email ON companies(email)")
+            # Persons denormalization table
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS persons (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_code INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    first_name TEXT, last_name TEXT, full_name TEXT,
+                    id_code TEXT, id_hash TEXT,
+                    role TEXT, start_date TEXT, end_date TEXT,
+                    ownership_pct REAL, contribution_amount REAL, currency TEXT,
+                    country TEXT,
+                    FOREIGN KEY (company_code) REFERENCES companies(code)
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(full_name)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_persons_id_code ON persons(id_code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_persons_company ON persons(company_code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_persons_source ON persons(source)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_persons_role ON persons(role)")
 
     @staticmethod
     def _normalize_date(date_str):
@@ -385,13 +420,67 @@ class SQLiteBackend(RegistryBackend):
             if 'linn' in p or 'vald' in p: return p
         return parts[1] if len(parts) > 1 else (parts[0] if parts and parts[0] else None)
 
+    @staticmethod
+    def _extract_latest_capital(item):
+        caps = item.get('yldandmed', {}).get('kapitalid', [])
+        if not caps:
+            return None, None
+        best = None
+        for c in caps:
+            if not c.get('lopp_kpv'):
+                if best is None or (c.get('algus_kpv', '') > best.get('algus_kpv', '')):
+                    best = c
+        if not best:
+            best = max(caps, key=lambda c: c.get('algus_kpv', ''))
+        amt = best.get('kapitali_suurus')
+        cur = best.get('kapitali_valuuta', 'EUR')
+        try:
+            return float(amt), cur
+        except (TypeError, ValueError):
+            return None, None
+
+    @staticmethod
+    def _extract_contacts(item):
+        contacts = item.get('yldandmed', {}).get('sidevahendid', [])
+        email = phone = website = None
+        for c in contacts:
+            ctype = (c.get('liik_tekstina') or '').lower()
+            val = c.get('sisu', '')
+            if not val:
+                continue
+            if not email and ('post' in ctype or 'mail' in ctype):
+                email = val
+            elif not phone and ('telefon' in ctype or 'mobiil' in ctype):
+                phone = val
+            elif not website and ('www' in ctype or 'internet' in ctype):
+                website = val
+        return email, phone, website
+
+    @staticmethod
+    def _extract_latest_employees(item):
+        reports = item.get('yldandmed', {}).get('info_majandusaasta_aruannetest', [])
+        if not reports:
+            return None
+        sorted_reports = sorted(reports, key=lambda r: r.get('majandusaasta_perioodi_lopp_kpv', ''), reverse=True)
+        for r in sorted_reports:
+            emp = r.get('tootajate_arv')
+            if emp is not None:
+                try:
+                    return int(emp)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
     def insert_batch_base(self, batch):
         with self.conn:
             self.conn.executemany(
-                "INSERT OR REPLACE INTO companies (code, name, status, maakond, linn, legal_form, founded_at, full_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                """INSERT OR REPLACE INTO companies
+                   (code, name, status, maakond, linn, legal_form, founded_at, full_data, vat_number)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [(i.get('ariregistri_kood'), i.get('nimi'), i.get('ettevotja_staatus_tekstina'),
                   self._extract_county(i), self._extract_city(i),
-                  i.get('ettevotja_oiguslik_vorm'), self._normalize_date(i.get('ettevotja_esmakande_kpv')), json.dumps(i)) for i in batch]
+                  i.get('ettevotja_oiguslik_vorm'), self._normalize_date(i.get('ettevotja_esmakande_kpv')),
+                  json.dumps(i), i.get('kmkr_nr') or None) for i in batch]
             )
 
     def update_batch_json(self, key, data_map):
@@ -412,6 +501,17 @@ class SQLiteBackend(RegistryBackend):
                 if status: updates.append("status = COALESCE(?, status)"); params.append(status)
                 founded = self._normalize_date(item.get('esmaregistreerimise_kpv'))
                 if founded: updates.append("founded_at = COALESCE(?, founded_at)"); params.append(founded)
+                # Extract new derived columns
+                cap_amt, cap_cur = self._extract_latest_capital(item)
+                if cap_amt is not None:
+                    updates.append("capital = ?"); params.append(cap_amt)
+                    updates.append("capital_currency = ?"); params.append(cap_cur)
+                email, phone, website = self._extract_contacts(item)
+                if email: updates.append("email = ?"); params.append(email)
+                if phone: updates.append("phone = ?"); params.append(phone)
+                if website: updates.append("website = ?"); params.append(website)
+                emp = self._extract_latest_employees(item)
+                if emp is not None: updates.append("employee_count = ?"); params.append(emp)
                 if updates:
                     params.append(code)
                     self.conn.execute(f"UPDATE companies SET {', '.join(updates)} WHERE code = ?", params)
@@ -420,7 +520,8 @@ class SQLiteBackend(RegistryBackend):
         with self.conn: self.conn.execute("UPDATE companies SET enrichment = ? WHERE code = ?", (json.dumps(enrichment), code))
 
     def search(self, term=None, person=None, location=None, status=None, limit=None,
-               emtak=None, founded_after=None, founded_before=None, legal_form=None):
+               emtak=None, founded_after=None, founded_before=None, legal_form=None,
+               min_capital=None, max_capital=None, has_email=False, has_phone=False, has_website=False):
         query = "SELECT * FROM companies WHERE 1=1"; params = []
         if term:
             if term.isdigit(): query += " AND code = ?"; params.append(int(term))
@@ -441,6 +542,11 @@ class SQLiteBackend(RegistryBackend):
         if founded_after: query += " AND founded_at >= ?"; params.append(founded_after)
         if founded_before: query += " AND founded_at <= ?"; params.append(founded_before)
         if legal_form: query += " AND legal_form LIKE ?"; params.append(f"%{legal_form}%")
+        if min_capital is not None: query += " AND capital >= ?"; params.append(float(min_capital))
+        if max_capital is not None: query += " AND capital <= ?"; params.append(float(max_capital))
+        if has_email: query += " AND email IS NOT NULL"
+        if has_phone: query += " AND phone IS NOT NULL"
+        if has_website: query += " AND website IS NOT NULL"
         if limit: query += f" LIMIT {int(limit)}"
         for row in self.conn.execute(query, params):
             data = json.loads(row['full_data'])
@@ -488,6 +594,37 @@ class SQLiteBackend(RegistryBackend):
                 FROM companies c, json_each(c.full_data, '$.yldandmed.teatatud_tegevusalad') AS items
                 WHERE json_extract(items.value, '$.emtak_kood') IS NOT NULL{emtak_filter}{where_sql}
                 GROUP BY json_extract(items.value, '$.emtak_kood') ORDER BY cnt DESC LIMIT ?"""
+        elif by == "capital-range":
+            query = f"""SELECT CASE
+                WHEN c.capital IS NULL THEN 'No data'
+                WHEN c.capital < 2500 THEN '< 2,500'
+                WHEN c.capital < 25000 THEN '2,500 - 25K'
+                WHEN c.capital < 100000 THEN '25K - 100K'
+                WHEN c.capital < 1000000 THEN '100K - 1M'
+                ELSE '1M+' END AS grp, COUNT(*) AS cnt
+                FROM companies c WHERE 1=1{where_sql} GROUP BY grp ORDER BY
+                CASE grp WHEN 'No data' THEN 0 WHEN '< 2,500' THEN 1 WHEN '2,500 - 25K' THEN 2
+                WHEN '25K - 100K' THEN 3 WHEN '100K - 1M' THEN 4 WHEN '1M+' THEN 5 END LIMIT ?"""
+        elif by == "employee-range":
+            query = f"""SELECT CASE
+                WHEN c.employee_count IS NULL THEN 'No data'
+                WHEN c.employee_count = 0 THEN '0'
+                WHEN c.employee_count <= 5 THEN '1-5'
+                WHEN c.employee_count <= 20 THEN '6-20'
+                WHEN c.employee_count <= 100 THEN '21-100'
+                WHEN c.employee_count <= 500 THEN '101-500'
+                ELSE '500+' END AS grp, COUNT(*) AS cnt
+                FROM companies c WHERE 1=1{where_sql} GROUP BY grp ORDER BY
+                CASE grp WHEN 'No data' THEN 0 WHEN '0' THEN 1 WHEN '1-5' THEN 2 WHEN '6-20' THEN 3
+                WHEN '21-100' THEN 4 WHEN '101-500' THEN 5 WHEN '500+' THEN 6 END LIMIT ?"""
+        elif by == "role":
+            query = f"""SELECT COALESCE(p.role, 'Unknown') AS grp, COUNT(DISTINCT p.company_code) AS cnt
+                FROM persons p JOIN companies c ON p.company_code = c.code WHERE 1=1{where_sql}
+                GROUP BY grp ORDER BY cnt DESC LIMIT ?"""
+        elif by == "country":
+            query = f"""SELECT COALESCE(p.country, 'Unknown') AS grp, COUNT(DISTINCT p.company_code) AS cnt
+                FROM persons p JOIN companies c ON p.company_code = c.code WHERE p.source = 'beneficiary'{where_sql}
+                GROUP BY grp ORDER BY cnt DESC LIMIT ?"""
         else:
             return []
         params.append(top)
@@ -506,14 +643,229 @@ class SQLiteBackend(RegistryBackend):
         has_county = self.conn.execute("SELECT COUNT(*) FROM companies WHERE maakond IS NOT NULL").fetchone()[0]
         has_founded = self.conn.execute("SELECT COUNT(*) FROM companies WHERE founded_at IS NOT NULL").fetchone()[0]
         has_emtak = self.conn.execute("SELECT COUNT(*) FROM companies WHERE full_data LIKE '%emtak_kood%'").fetchone()[0]
+        has_capital = self.conn.execute("SELECT COUNT(*) FROM companies WHERE capital IS NOT NULL").fetchone()[0]
+        has_email = self.conn.execute("SELECT COUNT(*) FROM companies WHERE email IS NOT NULL").fetchone()[0]
+        has_phone = self.conn.execute("SELECT COUNT(*) FROM companies WHERE phone IS NOT NULL").fetchone()[0]
+        has_website = self.conn.execute("SELECT COUNT(*) FROM companies WHERE website IS NOT NULL").fetchone()[0]
+        has_employees = self.conn.execute("SELECT COUNT(*) FROM companies WHERE employee_count IS NOT NULL").fetchone()[0]
+        has_vat = self.conn.execute("SELECT COUNT(*) FROM companies WHERE vat_number IS NOT NULL").fetchone()[0]
+        persons_count = 0
+        try:
+            persons_count = self.conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
         top_counties = self.conn.execute("SELECT maakond, COUNT(*) AS cnt FROM companies WHERE maakond IS NOT NULL GROUP BY maakond ORDER BY cnt DESC LIMIT 5").fetchall()
         top_legal = self.conn.execute("SELECT legal_form, COUNT(*) AS cnt FROM companies WHERE legal_form IS NOT NULL GROUP BY legal_form ORDER BY cnt DESC LIMIT 5").fetchall()
         return {
             "total": total, "enriched": enriched,
             "has_status": has_status, "has_county": has_county, "has_founded": has_founded, "has_emtak": has_emtak,
+            "has_capital": has_capital, "has_email": has_email, "has_phone": has_phone, "has_website": has_website,
+            "has_employees": has_employees, "has_vat": has_vat, "persons_count": persons_count,
             "top_counties": [(r[0], r[1]) for r in top_counties],
             "top_legal": [(r[0], r[1]) for r in top_legal],
         }
+
+    def search_persons(self, name=None, id_code=None, role=None, source=None, company_code=None, limit=50):
+        query = """SELECT p.*, c.name AS company_name FROM persons p
+                   JOIN companies c ON p.company_code = c.code WHERE 1=1"""
+        params = []
+        if name: query += " AND p.full_name LIKE ?"; params.append(f"%{name}%")
+        if id_code: query += " AND p.id_code = ?"; params.append(str(id_code))
+        if role: query += " AND p.role LIKE ?"; params.append(f"%{role}%")
+        if source: query += " AND p.source = ?"; params.append(source)
+        if company_code: query += " AND p.company_code = ?"; params.append(int(company_code))
+        query += " ORDER BY p.full_name"
+        if limit: query += f" LIMIT {int(limit)}"
+        return [dict(row) for row in self.conn.execute(query, params)]
+
+    def person_network(self, name=None, id_code=None):
+        query = """SELECT p.*, c.name AS company_name, c.status AS company_status FROM persons p
+                   JOIN companies c ON p.company_code = c.code WHERE """
+        params = []
+        if id_code:
+            query += "p.id_code = ?"; params.append(str(id_code))
+        elif name:
+            query += "p.full_name LIKE ?"; params.append(f"%{name}%")
+        else:
+            return []
+        query += " ORDER BY p.source, c.name"
+        return [dict(row) for row in self.conn.execute(query, params)]
+
+    def find_group(self, code, direction="both", max_depth=5):
+        results = {"company": None, "parents": [], "subsidiaries": []}
+        # Get the root company
+        row = self.conn.execute("SELECT code, name, status FROM companies WHERE code = ?", (int(code),)).fetchone()
+        if not row: return results
+        results["company"] = dict(row)
+
+        if direction in ("up", "both"):
+            # Find parent shareholders (who owns this company)
+            parents = self.conn.execute(
+                """SELECT p.*, c.name AS company_name FROM persons p
+                   JOIN companies c ON p.company_code = c.code
+                   WHERE p.company_code = ? AND p.source = 'shareholder'""",
+                (int(code),)).fetchall()
+            results["parents"] = [dict(r) for r in parents]
+
+        if direction in ("down", "both"):
+            # Find subsidiaries (where this code appears as shareholder id_code)
+            visited = set()
+            queue = [(int(code), 0)]
+            while queue:
+                current_code, depth = queue.pop(0)
+                if depth >= max_depth or current_code in visited:
+                    continue
+                visited.add(current_code)
+                subs = self.conn.execute(
+                    """SELECT DISTINCT p.company_code, c.name AS company_name, c.status,
+                              p.ownership_pct, p.contribution_amount, p.currency
+                       FROM persons p JOIN companies c ON p.company_code = c.code
+                       WHERE p.id_code = ? AND p.source = 'shareholder'""",
+                    (str(current_code),)).fetchall()
+                for s in subs:
+                    sub = dict(s)
+                    sub["depth"] = depth + 1
+                    sub["parent_code"] = current_code
+                    results["subsidiaries"].append(sub)
+                    queue.append((sub["company_code"], depth + 1))
+        return results
+
+    def employee_trend(self, code=None, emtak=None, location=None):
+        if code:
+            row = self.conn.execute("SELECT full_data FROM companies WHERE code = ?", (int(code),)).fetchone()
+            if not row: return []
+            data = json.loads(row[0])
+            reports = data.get('yldandmed', {}).get('info_majandusaasta_aruannetest', [])
+            trend = []
+            for r in sorted(reports, key=lambda x: x.get('majandusaasta_perioodi_lopp_kpv', '')):
+                emp = r.get('tootajate_arv')
+                if emp is not None:
+                    try:
+                        trend.append({"year": r.get('majandusaasta_perioodi_lopp_kpv', '')[:4], "employees": int(emp)})
+                    except (TypeError, ValueError):
+                        pass
+            return trend
+        else:
+            # Industry-wide aggregation
+            where_clauses = []; params = []
+            if emtak:
+                if isinstance(emtak, list):
+                    placeholders = " OR ".join(["json_extract(e2.value, '$.emtak_kood') LIKE ?"] * len(emtak))
+                    where_clauses.append(f"""EXISTS (SELECT 1 FROM json_each(c.full_data, '$.yldandmed.teatatud_tegevusalad') AS e2
+                                        WHERE {placeholders})""")
+                    params.extend([f"{e}%" for e in emtak])
+                else:
+                    where_clauses.append("""EXISTS (SELECT 1 FROM json_each(c.full_data, '$.yldandmed.teatatud_tegevusalad') AS e2
+                                        WHERE json_extract(e2.value, '$.emtak_kood') LIKE ?)""")
+                    params.append(f"{emtak}%")
+            if location:
+                where_clauses.append("(c.maakond LIKE ? OR c.linn LIKE ?)")
+                params.extend([f"%{location}%", f"%{location}%"])
+            where_sql = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
+            query = f"""SELECT SUBSTR(json_extract(r.value, '$.majandusaasta_perioodi_lopp_kpv'), 1, 4) AS yr,
+                               SUM(CAST(json_extract(r.value, '$.tootajate_arv') AS INTEGER)) AS total_emp,
+                               COUNT(DISTINCT c.code) AS company_count
+                        FROM companies c, json_each(c.full_data, '$.yldandmed.info_majandusaasta_aruannetest') AS r
+                        WHERE json_extract(r.value, '$.tootajate_arv') IS NOT NULL{where_sql}
+                        GROUP BY yr ORDER BY yr"""
+            return [{"year": r[0], "employees": r[1], "companies": r[2]} for r in self.conn.execute(query, params)]
+
+    def populate_persons(self):
+        logger.info("Populating persons table...")
+        with self.conn:
+            self.conn.execute("DELETE FROM persons")
+            cursor = self.conn.execute("SELECT code, full_data FROM companies")
+            batch = []; count = 0
+            for row in cursor:
+                code = row[0]
+                data = json.loads(row[1])
+                # Board members from kaardile_kantud_isikud
+                for group in data.get('isikud', []):
+                    if isinstance(group, dict):
+                        for p in group.get('kaardile_kantud_isikud', []):
+                            first = p.get('eesnimi', '')
+                            last = p.get('nimi_arinimi', '')
+                            full = f"{first} {last}".strip()
+                            batch.append((code, 'board', first or None, last or None, full or None,
+                                         str(p.get('isikukood_registrikood', '')) or None,
+                                         p.get('isikukood_hash'),
+                                         p.get('isiku_roll_tekstina'),
+                                         p.get('algus_kpv'), p.get('lopp_kpv'),
+                                         None, None, None, None))
+                # Shareholders from osanikud
+                for group in data.get('osanikud', []):
+                    if isinstance(group, dict):
+                        for s in group.get('osanikud', []):
+                            first = s.get('eesnimi', '')
+                            last = s.get('nimi_arinimi', '')
+                            full = f"{first} {last}".strip()
+                            pct = s.get('osaluse_protsent')
+                            amt = s.get('osamaksu_summa') or s.get('osaluse_suurus')
+                            cur = s.get('valuuta') or s.get('osaluse_valuuta')
+                            try: pct = float(pct) if pct else None
+                            except (TypeError, ValueError): pct = None
+                            try: amt = float(amt) if amt else None
+                            except (TypeError, ValueError): amt = None
+                            batch.append((code, 'shareholder', first or None, last or None, full or None,
+                                         str(s.get('isikukood_registrikood', '')) or None,
+                                         s.get('isikukood_hash'),
+                                         s.get('osaluse_omandiliik_tekstina'),
+                                         s.get('algus_kpv'), s.get('lopp_kpv'),
+                                         pct, amt, cur, None))
+                # Beneficiaries from kasusaajad
+                for group in data.get('kasusaajad', []):
+                    if isinstance(group, dict):
+                        for b in group.get('kasusaajad', []):
+                            first = b.get('eesnimi', '')
+                            last = b.get('nimi', '')
+                            full = f"{first} {last}".strip()
+                            batch.append((code, 'beneficiary', first or None, last or None, full or None,
+                                         str(b.get('isikukood_registrikood', '')) or None,
+                                         b.get('isikukood_hash'),
+                                         b.get('kontrolli_teostamise_viis_tekstina'),
+                                         None, None, None, None, None,
+                                         b.get('aadress_riik_tekstina')))
+                count += 1
+                if len(batch) >= 10000:
+                    self.conn.executemany(
+                        """INSERT INTO persons (company_code, source, first_name, last_name, full_name,
+                           id_code, id_hash, role, start_date, end_date,
+                           ownership_pct, contribution_amount, currency, country) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", batch)
+                    batch = []
+            if batch:
+                self.conn.executemany(
+                    """INSERT INTO persons (company_code, source, first_name, last_name, full_name,
+                       id_code, id_hash, role, start_date, end_date,
+                       ownership_pct, contribution_amount, currency, country) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", batch)
+        total = self.conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0]
+        logger.info(f"Populated {total:,} person records from {count:,} companies")
+
+    def rebuild_derived_columns(self):
+        logger.info("Rebuilding derived columns from full_data...")
+        cursor = self.conn.execute("SELECT code, full_data FROM companies")
+        count = 0
+        with self.conn:
+            for row in cursor:
+                code = row[0]
+                data = json.loads(row[1])
+                updates = []; params = []
+                cap_amt, cap_cur = self._extract_latest_capital(data)
+                if cap_amt is not None:
+                    updates.append("capital = ?"); params.append(cap_amt)
+                    updates.append("capital_currency = ?"); params.append(cap_cur)
+                email, phone, website = self._extract_contacts(data)
+                if email: updates.append("email = ?"); params.append(email)
+                if phone: updates.append("phone = ?"); params.append(phone)
+                if website: updates.append("website = ?"); params.append(website)
+                emp = self._extract_latest_employees(data)
+                if emp is not None: updates.append("employee_count = ?"); params.append(emp)
+                if updates:
+                    params.append(code)
+                    self.conn.execute(f"UPDATE companies SET {', '.join(updates)} WHERE code = ?", params)
+                count += 1
+                if count % 50000 == 0:
+                    logger.info(f"  Processed {count:,} companies...")
+        logger.info(f"Rebuilt derived columns for {count:,} companies")
 
     def commit(self): self.conn.commit()
 
@@ -579,6 +931,10 @@ class EstonianRegistry:
                         self.db.update_batch_json(key, groups); groups = defaultdict(list); count = 0
                 if groups: self.db.update_batch_json(key, groups)
             self.db.mark_file_status(f, 'DONE'); self.db.commit()
+        if force:
+            self.db.rebuild_derived_columns()
+            self.db.populate_persons()
+            self.db.commit()
 
     def enrich(self, codes: list[str]):
         if not self.db: return
@@ -789,6 +1145,13 @@ def display_stats(stats, lang="et"):
     t.add_row("With county" if to_en else "Maakonnaga", pct(stats["has_county"]))
     t.add_row("With founding date" if to_en else "Asutamiskuupaevaga", pct(stats["has_founded"]))
     t.add_row("With EMTAK codes" if to_en else "EMTAK koodidega", pct(stats["has_emtak"]))
+    t.add_row("With capital data" if to_en else "Kapitaliga", pct(stats.get("has_capital", 0)))
+    t.add_row("With email" if to_en else "E-postiga", pct(stats.get("has_email", 0)))
+    t.add_row("With phone" if to_en else "Telefoniga", pct(stats.get("has_phone", 0)))
+    t.add_row("With website" if to_en else "Veebilehega", pct(stats.get("has_website", 0)))
+    t.add_row("With employee count" if to_en else "Tootajate arvuga", pct(stats.get("has_employees", 0)))
+    t.add_row("With VAT number" if to_en else "KMKR numbriga", pct(stats.get("has_vat", 0)))
+    t.add_row("Person records" if to_en else "Isikukirjeid", f"{stats.get('persons_count', 0):,}")
     t.add_row("PDF enriched" if to_en else "PDF-iga rikastatud", pct(stats["enriched"]))
     console.print(t)
     if stats["top_counties"]:
@@ -844,6 +1207,29 @@ def filter_by_employees(results, min_employees=None, max_employees=None):
             continue
         yield item
 
+def filter_growing(results):
+    """Post-filter: only companies where latest employee_count > previous year's."""
+    for item in results:
+        reports = item.get('yldandmed', {}).get('info_majandusaasta_aruannetest', [])
+        if len(reports) < 2:
+            continue
+        sorted_reports = sorted(reports, key=lambda r: r.get('majandusaasta_perioodi_lopp_kpv', ''), reverse=True)
+        latest = prev = None
+        for r in sorted_reports:
+            emp = r.get('tootajate_arv')
+            if emp is not None:
+                try:
+                    val = int(emp)
+                except (TypeError, ValueError):
+                    continue
+                if latest is None:
+                    latest = val
+                elif prev is None:
+                    prev = val
+                    break
+        if latest is not None and prev is not None and latest > prev:
+            yield item
+
 def shorten_status(status, to_en=False):
     """Shorten status labels for compact display."""
     status_map = {
@@ -868,6 +1254,7 @@ def display_company_summary(items, lang="et"):
     t.add_column("Code" if to_en else "Kood", style="cyan", justify="right")
     t.add_column("County" if to_en else "Maakond", style="dim")
     t.add_column("Industry" if to_en else "Tegevusala", max_width=30)
+    t.add_column("Capital" if to_en else "Kapital", justify="right", style="yellow")
     t.add_column("Emp" if to_en else "Toot", justify="right", style="green")
     t.add_column("Founded" if to_en else "Asutatud", style="dim")
     t.add_column("Status" if to_en else "Staatus")
@@ -883,14 +1270,20 @@ def display_company_summary(items, lang="et"):
         activity = get_main_activity(item)
         if len(activity) > 30:
             activity = activity[:27] + "..."
+        # Capital from yldandmed
+        cap_amt, cap_cur = SQLiteBackend._extract_latest_capital(item)
+        if cap_amt is not None:
+            cap_str = f"{cap_amt:,.0f}" if cap_amt == int(cap_amt) else f"{cap_amt:,.2f}"
+        else:
+            cap_str = "-"
         emp = get_latest_employees(item)
         emp_str = str(emp) if emp is not None else "-"
         founded = item.get('yldandmed', {}).get('esmaregistreerimise_kpv', '') or ''
         if founded and len(founded) >= 10:
-            founded = founded[:10]  # Just the date part
+            founded = founded[:10]
         status = item.get('yldandmed', {}).get('staatus_tekstina', '') or item.get('ettevotja_staatus_tekstina', '') or ''
         status = shorten_status(status, to_en)
-        t.add_row(name, code, county, activity, emp_str, founded, status)
+        t.add_row(name, code, county, activity, cap_str, emp_str, founded, status)
     console.print(t)
     console.print(f"\n[success]{'Found' if to_en else 'Leitud'}: {count} {'companies' if to_en else 'ettevottet'}[/success]")
     return count
@@ -926,17 +1319,21 @@ def display_industry_list(lang="et"):
 
 def export_csv(db, output_path, lang="et", emtak=None, location=None, status=None,
                legal_form=None, founded_after=None, founded_before=None,
-               min_employees=None, max_employees=None, limit=None):
+               min_employees=None, max_employees=None, limit=None,
+               min_capital=None, max_capital=None, has_email=False, has_phone=False, has_website=False):
     """Export filtered companies to CSV with flattened columns."""
     to_en = (lang == "en")
     results = db.search(emtak=emtak, location=location, status=status,
                         legal_form=legal_form, founded_after=founded_after,
-                        founded_before=founded_before, limit=limit)
+                        founded_before=founded_before, limit=limit,
+                        min_capital=min_capital, max_capital=max_capital,
+                        has_email=has_email, has_phone=has_phone, has_website=has_website)
     if min_employees or max_employees:
         results = filter_by_employees(results, min_employees, max_employees)
 
     headers = ["code", "name", "status", "county", "city", "legal_form", "founded",
-               "main_industry_code", "main_industry_name", "employees", "email", "phone", "website"]
+               "main_industry_code", "main_industry_name", "employees", "capital", "capital_currency",
+               "vat_number", "email", "phone", "website"]
 
     count = 0
     with open(output_path, 'w', encoding='utf-8-sig', newline='') as f:
@@ -982,11 +1379,14 @@ def export_csv(db, output_path, lang="et", emtak=None, location=None, status=Non
                 status_val = translate_value(status_val, True)
                 main_name = translate_value(main_name, True)
 
+            cap_amt, cap_cur = SQLiteBackend._extract_latest_capital(item)
             writer.writerow([
                 item.get('ariregistri_kood', ''), item.get('nimi', ''), status_val,
                 county, city, item.get('ettevotja_oiguslik_vorm', ''),
                 yld.get('esmaregistreerimise_kpv', '') or item.get('ettevotja_esmakande_kpv', ''),
                 main_code, main_name, emp if emp is not None else '',
+                cap_amt if cap_amt is not None else '', cap_cur or '',
+                item.get('kmkr_nr', ''),
                 email, phone, website
             ])
     console.print(f"[success]Exported {count} companies to {output_path}[/success]")
@@ -1075,9 +1475,138 @@ def cmd_report(db, report_type, lang="et", **kwargs):
                 st_label = translate_value(st, to_en)
                 console.print(f"\n[bold yellow]{st_label} - {'by county' if to_en else 'maakonniti'}[/bold yellow]")
                 display_analysis(results, by="county", lang=lang)
+    elif report_type == "employee-trend":
+        code = kwargs.get('code')
+        industry = kwargs.get('industry')
+        emtak = resolve_industry(industry) if industry else None
+        if industry and not emtak:
+            return
+        if code:
+            title = f"{'Employee Trend' if to_en else 'Tootajate trend'}: {code}"
+            console.print(f"\n[bold blue]{title}[/bold blue]\n")
+            trend = db.employee_trend(code=code)
+            display_employee_trend(trend, code=code, lang=lang)
+        else:
+            title = f"{'Employee Trend' if to_en else 'Tootajate trend'}: {industry or 'All'}"
+            console.print(f"\n[bold blue]{title}[/bold blue]\n")
+            location = kwargs.get('location')
+            trend = db.employee_trend(emtak=emtak, location=location)
+            display_employee_trend(trend, lang=lang)
     else:
         console.print(f"[warning]Unknown report type: {report_type}[/warning]")
-        console.print("Available: market-overview, new-companies, top-industries, industry-growth, regional, bankruptcies")
+        console.print("Available: market-overview, new-companies, top-industries, industry-growth, regional, bankruptcies, employee-trend")
+
+def display_person_results(results, lang="et"):
+    to_en = (lang == "en")
+    t = Table(title="Person Search Results" if to_en else "Isikuotsingu tulemused", box=box.ROUNDED, header_style="bold yellow", expand=True)
+    t.add_column("Person" if to_en else "Isik", style="bold white", max_width=30)
+    t.add_column("ID Code" if to_en else "Isikukood", style="magenta")
+    t.add_column("Company" if to_en else "Ettevote", max_width=30)
+    t.add_column("Code" if to_en else "Kood", style="cyan", justify="right")
+    t.add_column("Source" if to_en else "Allikas", style="dim")
+    t.add_column("Role" if to_en else "Roll", max_width=25)
+    t.add_column("Since" if to_en else "Alates", style="dim")
+    for r in results:
+        id_code = r.get('id_code') or r.get('id_hash', '')[:8] + '...' if r.get('id_hash') else '-'
+        t.add_row(
+            r.get('full_name', ''), id_code,
+            r.get('company_name', ''), str(r.get('company_code', '')),
+            r.get('source', ''), translate_value(r.get('role', ''), to_en),
+            r.get('start_date', '') or '-')
+    console.print(t)
+    console.print(f"\n[success]{'Found' if to_en else 'Leitud'}: {len(results)} {'records' if to_en else 'kirjet'}[/success]")
+
+def display_person_network(results, name=None, lang="et"):
+    to_en = (lang == "en")
+    if not results:
+        console.print(f"[warning]{'No results found.' if to_en else 'Tulemusi ei leitud.'}[/warning]")
+        return
+    title = f"{'Network' if to_en else 'Voorgustik'}: {name or results[0].get('full_name', 'Unknown')}"
+    tree = Tree(f"[bold blue]{title}[/bold blue]")
+    # Group by source
+    by_source = defaultdict(list)
+    for r in results:
+        by_source[r['source']].append(r)
+    source_labels = {'board': 'Board Member' if to_en else 'Juhatuse liige',
+                     'shareholder': 'Shareholder' if to_en else 'Osanik',
+                     'beneficiary': 'Beneficiary' if to_en else 'Kasusaaja'}
+    for src, items in by_source.items():
+        node = tree.add(f"[bold yellow]{source_labels.get(src, src)}[/bold yellow] ({len(items)})")
+        for r in items:
+            status = r.get('company_status', '')
+            status_tag = f" [dim]({shorten_status(status, to_en)})[/dim]" if status else ""
+            detail = ""
+            if r.get('ownership_pct'):
+                detail = f" [green]{r['ownership_pct']:.1f}%[/green]"
+            elif r.get('role'):
+                detail = f" [dim]{translate_value(r['role'], to_en)}[/dim]"
+            node.add(f"[cyan]{r.get('company_name', 'N/A')}[/cyan] ({r.get('company_code', '')}){detail}{status_tag}")
+    console.print(tree)
+
+def display_group_tree(group_data, lang="et"):
+    to_en = (lang == "en")
+    company = group_data.get("company", {})
+    if not company:
+        console.print(f"[warning]{'Company not found.' if to_en else 'Ettevotet ei leitud.'}[/warning]")
+        return
+    title = f"{'Corporate Group' if to_en else 'Kontsern'}: {company.get('name', 'N/A')} ({company.get('code', '')})"
+    tree = Tree(f"[bold blue]{title}[/bold blue]")
+    parents = group_data.get("parents", [])
+    if parents:
+        pnode = tree.add(f"[bold yellow]{'Shareholders (owners)' if to_en else 'Osanikud (omanikud)'}[/bold yellow]")
+        for p in parents:
+            pct = f" [green]{p['ownership_pct']:.1f}%[/green]" if p.get('ownership_pct') else ""
+            amt = f" ({p.get('contribution_amount', '')}{' ' + p.get('currency', '') if p.get('currency') else ''})" if p.get('contribution_amount') else ""
+            pnode.add(f"{p.get('full_name', 'N/A')} [dim]({p.get('id_code', '-')})[/dim]{pct}{amt}")
+    subs = group_data.get("subsidiaries", [])
+    if subs:
+        snode = tree.add(f"[bold yellow]{'Subsidiaries' if to_en else 'Tutarettevotted'}[/bold yellow]")
+        # Build tree by depth
+        depth_nodes = {0: snode}
+        for s in sorted(subs, key=lambda x: x.get('depth', 1)):
+            depth = s.get('depth', 1)
+            parent = depth_nodes.get(depth - 1, snode)
+            pct = f" [green]{s['ownership_pct']:.1f}%[/green]" if s.get('ownership_pct') else ""
+            n = parent.add(f"[cyan]{s.get('company_name', 'N/A')}[/cyan] ({s.get('company_code', '')}){pct}")
+            depth_nodes[depth] = n
+    console.print(tree)
+
+def display_employee_trend(trend, code=None, lang="et"):
+    to_en = (lang == "en")
+    title = "Employee Trend" if to_en else "Tootajate trend"
+    if code:
+        title += f" - {code}"
+    t = Table(title=title, box=box.ROUNDED, header_style="bold yellow", expand=True)
+    t.add_column("Year" if to_en else "Aasta", style="cyan")
+    t.add_column("Employees" if to_en else "Tootajad", justify="right", style="bold white")
+    t.add_column("Change" if to_en else "Muutus", justify="right")
+    t.add_column("% Change" if to_en else "% muutus", justify="right")
+    if not trend:
+        console.print(f"[warning]{'No trend data available.' if to_en else 'Trendiandmed puuduvad.'}[/warning]")
+        return
+    # For industry-wide, also show company count
+    has_companies = 'companies' in trend[0]
+    if has_companies:
+        t.add_column("Companies" if to_en else "Ettevotteid", justify="right", style="dim")
+    prev = None
+    for entry in trend:
+        emp = entry['employees']
+        change = ""
+        pct_change = ""
+        if prev is not None:
+            diff = emp - prev
+            change = f"+{diff}" if diff > 0 else str(diff)
+            if prev > 0:
+                pct = (diff / prev) * 100
+                color = "green" if pct > 0 else "red" if pct < 0 else ""
+                pct_change = f"[{color}]{pct:+.1f}%[/{color}]" if color else f"{pct:+.1f}%"
+                change = f"[{color}]{change}[/{color}]" if color else change
+        row = [entry['year'], f"{emp:,}", change, pct_change]
+        if has_companies:
+            row.append(f"{entry.get('companies', 0):,}")
+        t.add_row(*row)
+        prev = emp
+    console.print(t)
 
 def display_analysis(results, by, lang="et"):
     lbl = UI_LABELS[lang]; to_en = (lang == "en")
@@ -1136,6 +1665,12 @@ def main():
     fnd.add_argument("--founded-after", help="Founded after date (YYYY-MM-DD)")
     fnd.add_argument("--founded-before", help="Founded before date (YYYY-MM-DD)")
     fnd.add_argument("--legal-form", help="Legal form filter")
+    fnd.add_argument("--min-capital", type=float, help="Minimum share capital")
+    fnd.add_argument("--max-capital", type=float, help="Maximum share capital")
+    fnd.add_argument("--has-email", action="store_true", help="Only companies with email")
+    fnd.add_argument("--has-phone", action="store_true", help="Only companies with phone")
+    fnd.add_argument("--has-website", action="store_true", help="Only companies with website")
+    fnd.add_argument("--growing", action="store_true", help="Only companies with growing employee count")
     fnd.add_argument("--limit", type=int, default=50, help="Max results (default: 50)")
     fnd.add_argument("--full", action="store_true", help="Show full dossier instead of summary")
     fnd.add_argument("--json", action="store_true", help="Output as JSON")
@@ -1143,18 +1678,35 @@ def main():
 
     # Analyze command
     anl = sub.add_parser("analyze", aliases=["analüüs"])
-    anl.add_argument("--by", required=True, choices=["county", "status", "legal-form", "emtak", "year"])
+    anl.add_argument("--by", required=True, choices=["county", "status", "legal-form", "emtak", "year", "capital-range", "employee-range", "role", "country"])
     anl.add_argument("--emtak"); anl.add_argument("--industry"); anl.add_argument("--location"); anl.add_argument("--status"); anl.add_argument("--legal-form")
     anl.add_argument("--founded-after"); anl.add_argument("--founded-before")
     anl.add_argument("--top", type=int, default=20); anl.add_argument("--json", action="store_true")
 
+    # Person command
+    per = sub.add_parser("person", aliases=["isik"], help="Search persons across all companies")
+    per.add_argument("name", nargs="?", help="Person name to search")
+    per.add_argument("--id", dest="id_code", help="Person or company ID code (exact)")
+    per.add_argument("--role", help="Filter by role (LIKE match)")
+    per.add_argument("--source", choices=["board", "shareholder", "beneficiary"], help="Filter by source")
+    per.add_argument("--code", help="Filter by company code")
+    per.add_argument("--network", action="store_true", help="Show all companies for this person")
+    per.add_argument("--limit", type=int, default=50)
+
+    # Group command
+    grp = sub.add_parser("group", aliases=["kontsern"], help="Corporate ownership chain mapping")
+    grp.add_argument("code", help="Company registry code")
+    grp.add_argument("--direction", choices=["up", "down", "both"], default="both", help="Direction: up (owners), down (subsidiaries), both")
+    grp.add_argument("--depth", type=int, default=5, help="Max recursion depth")
+
     # Report command (pre-built business reports)
     rpt = sub.add_parser("report", aliases=["aruanne"], help="Pre-built business intelligence reports")
-    rpt.add_argument("type", choices=["market-overview", "new-companies", "top-industries", "industry-growth", "regional", "bankruptcies"])
+    rpt.add_argument("type", choices=["market-overview", "new-companies", "top-industries", "industry-growth", "regional", "bankruptcies", "employee-trend"])
     rpt.add_argument("--period", help="Year for time-based reports (e.g., 2024)")
     rpt.add_argument("--industry", help="Industry name for industry reports")
     rpt.add_argument("-l", "--location", help="Location filter")
     rpt.add_argument("--county", help="County for regional report")
+    rpt.add_argument("--code", help="Company code for company-specific reports")
 
     # Export command (improved with filters)
     exp = sub.add_parser("export", aliases=["ekspordi"], help="Export companies to CSV or JSON")
@@ -1165,13 +1717,15 @@ def main():
     exp.add_argument("--legal-form", help="Legal form filter")
     exp.add_argument("--founded-after"); exp.add_argument("--founded-before")
     exp.add_argument("--min-employees", type=int); exp.add_argument("--max-employees", type=int)
+    exp.add_argument("--min-capital", type=float); exp.add_argument("--max-capital", type=float)
+    exp.add_argument("--has-email", action="store_true"); exp.add_argument("--has-phone", action="store_true"); exp.add_argument("--has-website", action="store_true")
     exp.add_argument("--limit", type=int, help="Max companies to export")
 
     args = parser.parse_args(); setup_logging(args.verbose)
 
     # Language detection
-    et_cmds = ["otsi", "rikasta", "ühenda", "sünk", "ekspordi", "analüüs", "statistika", "leia", "aruanne"]
-    en_cmds = ["search", "enrich", "merge", "sync", "export", "analyze", "stats", "find", "report"]
+    et_cmds = ["otsi", "rikasta", "ühenda", "sünk", "ekspordi", "analüüs", "statistika", "leia", "aruanne", "isik", "kontsern"]
+    en_cmds = ["search", "enrich", "merge", "sync", "export", "analyze", "stats", "find", "report", "person", "group"]
     cmd_typed = sys.argv[1] if len(sys.argv) > 1 else ""
     if args.en: lang = "en"
     elif args.ee: lang = "et"
@@ -1213,13 +1767,17 @@ def main():
             if not emtak: return
         # Use a higher limit for post-filtering by employees
         fetch_limit = args.limit
-        if args.min_employees or args.max_employees:
+        if args.min_employees or args.max_employees or args.growing:
             fetch_limit = None  # Fetch all, filter in Python
         results = reg.db.search(term=args.query, location=args.location, status=args.status,
                                 limit=fetch_limit, emtak=emtak, founded_after=args.founded_after,
-                                founded_before=args.founded_before, legal_form=args.legal_form)
+                                founded_before=args.founded_before, legal_form=args.legal_form,
+                                min_capital=args.min_capital, max_capital=args.max_capital,
+                                has_email=args.has_email, has_phone=args.has_phone, has_website=args.has_website)
         if args.min_employees or args.max_employees:
             results = filter_by_employees(results, args.min_employees, args.max_employees)
+        if args.growing:
+            results = filter_growing(results)
         # Apply limit after employee filter
         def limited(gen, n):
             for i, item in enumerate(gen):
@@ -1257,9 +1815,23 @@ def main():
         else:
             display_analysis(results, by=args.by, lang=lang)
 
+    elif args.cmd in ["person", "isik"]:
+        if args.network:
+            results = reg.db.person_network(name=args.name, id_code=args.id_code)
+            display_person_network(results, name=args.name or args.id_code, lang=lang)
+        else:
+            results = reg.db.search_persons(name=args.name, id_code=args.id_code, role=args.role,
+                                            source=args.source, company_code=args.code, limit=args.limit)
+            display_person_results(results, lang=lang)
+
+    elif args.cmd in ["group", "kontsern"]:
+        group_data = reg.db.find_group(args.code, direction=args.direction, max_depth=args.depth)
+        display_group_tree(group_data, lang=lang)
+
     elif args.cmd in ["report", "aruanne"]:
         cmd_report(reg.db, args.type, lang=lang, period=args.period,
-                   industry=args.industry, location=args.location, county=args.county)
+                   industry=args.industry, location=args.location, county=args.county,
+                   code=getattr(args, 'code', None))
 
     elif args.cmd in ["export", "ekspordi"]:
         output = Path(args.output)
@@ -1271,12 +1843,16 @@ def main():
             export_csv(reg.db, output, lang=lang, emtak=emtak, location=args.location,
                        status=args.status, legal_form=args.legal_form,
                        founded_after=args.founded_after, founded_before=args.founded_before,
-                       min_employees=args.min_employees, max_employees=args.max_employees, limit=args.limit)
+                       min_employees=args.min_employees, max_employees=args.max_employees, limit=args.limit,
+                       min_capital=args.min_capital, max_capital=args.max_capital,
+                       has_email=args.has_email, has_phone=args.has_phone, has_website=args.has_website)
         else:
             # JSON export (original behavior with filters)
             results = reg.db.search(emtak=emtak, location=args.location, status=args.status,
                                     legal_form=args.legal_form, founded_after=args.founded_after,
-                                    founded_before=args.founded_before, limit=args.limit)
+                                    founded_before=args.founded_before, limit=args.limit,
+                                    min_capital=args.min_capital, max_capital=args.max_capital,
+                                    has_email=args.has_email, has_phone=args.has_phone, has_website=args.has_website)
             if args.min_employees or args.max_employees:
                 results = filter_by_employees(results, args.min_employees, args.max_employees)
             data = [translate_item(i, to_en=(lang=="en")) for i in results]

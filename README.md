@@ -13,10 +13,12 @@ Kiire, põhjalik ja visuaalselt selge tööriist Eesti äriregistri avaandmete a
 - **Paralleelsed ja jätkatavad allalaadimised**: Laeb alla kõik registrifailid korraga, kasutades HTTP Range päiseid katkenud allalaadimiste jätkamiseks.
 - **SQLite arhitektuur**: Kasutab kohalikku SQLite andmebaasi kiireteks otsinguteks, keerukateks filtriteks ja andmete rikastamiseks.
 - **Kakskeelne tugi**: Toetus nii eesti- kui ka ingliskeelsetele käskudele ja väljundile.
-- **Ärikasutajate otsing (`leia`)**: Otsi ettevõtteid tegevusala, asukoha, töötajate arvu ja asutamiskuupäeva järgi — ilma EMTAK koode teadmata.
-- **Äriaruanded (`aruanne`)**: Valmis tururaportid ühe käsuga: turuülevaade, uued ettevõtted, tegevusalade edetabel, piirkondlik analüüs, pankrotid.
-- **Andmeanalüüs (`analüüs`)**: Grupeeri ettevõtteid maakonna, staatuse, õigusliku vormi, EMTAK koodi või asutamisaasta järgi.
-- **CSV eksport**: Ekspordi filtreeritud tulemused Exceli-sõbralikku CSV-faili koos kontaktandmete, töötajate arvu ja tegevusalaga.
+- **Ärikasutajate otsing (`leia`)**: Otsi ettevõtteid tegevusala, asukoha, töötajate arvu, kapitali, kontaktide ja asutamiskuupäeva järgi.
+- **Isikuotsing (`isik`)**: Otsi juhatuse liikmeid, osanikke ja kasusaajaid üle kõigi ettevõtete. Näita isiku võrgustikku.
+- **Kontsernide kaardistamine (`kontsern`)**: Rekursiivne omandiahela kaardistamine — kes omab keda, tütarettevõtted.
+- **Äriaruanded (`aruanne`)**: Valmis tururaportid: turuülevaade, uued ettevõtted, tegevusalade edetabel, piirkondlik analüüs, pankrotid, töötajate trend.
+- **Andmeanalüüs (`analüüs`)**: Grupeeri maakonna, staatuse, õigusliku vormi, EMTAK koodi, asutamisaasta, kapitalivahemiku, töötajate vahemiku, rolli või riigi järgi.
+- **CSV eksport**: Ekspordi filtreeritud tulemused Exceli-sõbralikku CSV-faili koos kontaktide, kapitali, KMKR numbri ja tegevusalaga.
 - **Tegevusalade nimekaart**: 70+ tegevusala ingliskeelne nimetus → EMTAK koodid. Kirjavigade soovitused kaasa arvatud.
 - **Põhjalikud toimikud**: Kuvab kõik registrist kättesaadavad andmed, sh nime/aadressi ajalugu, kapitali muudatused ja tehnilised märkused.
 - **Isikukoodide avalikustamine (rikastamine)**: Parsib ametlikke registrikaardi PDF-e, et avalikustada isikukoodid.
@@ -34,39 +36,75 @@ uv run registry.py sünk
 # Leia tarkvaraettevõtted Tallinnas, vähemalt 10 töötajat
 uv run registry.py leia --industry software --location Tallinn --min-employees 10
 
-# Leia ehitusettevõtted, asutatud pärast 2023
-uv run registry.py leia --industry construction --founded-after 2023-01-01
+# Leia ehitusettevõtted kapitaliga üle 25 000 €
+uv run registry.py leia --industry construction --min-capital 25000
+
+# Leia ettevõtted e-posti ja veebilehega
+uv run registry.py leia --industry software --has-email --has-website
+
+# Leia kasvavad ettevõtted (töötajate arv suureneb)
+uv run registry.py leia --industry software --growing --limit 20
 
 # Leia konkreetne ettevõte nimega
 uv run registry.py leia "Bolt"
 ```
 
-### 3. Äriandmete raportid
+### 3. Isikuotsing
 ```bash
-uv run registry.py --en aruanne market-overview
-uv run registry.py --en aruanne new-companies --period 2024
-uv run registry.py --en aruanne top-industries --location Tartu
-uv run registry.py --en aruanne regional --county "Harju maakond"
+# Otsi isikut nime järgi
+uv run registry.py isik "Markus Villig"
+
+# Näita isiku võrgustikku (kõik seotud ettevõtted)
+uv run registry.py isik "Markus Villig" --network
+
+# Otsi rolli järgi
+uv run registry.py isik --role "Juhatuse liige" --limit 20
 ```
 
-### 4. Analüüs
+### 4. Kontsernide kaardistamine
+```bash
+# Omandiahel mõlemas suunas
+uv run registry.py kontsern 14532901
+
+# Ainult omanikud (üles)
+uv run registry.py kontsern 14532901 --direction up
+
+# Ainult tütarettevõtted (alla)
+uv run registry.py kontsern 14532901 --direction down --depth 3
+```
+
+### 5. Äriandmete raportid
+```bash
+uv run registry.py aruanne market-overview
+uv run registry.py aruanne new-companies --period 2024
+uv run registry.py aruanne top-industries --location Tartu
+uv run registry.py aruanne regional --county "Harju maakond"
+uv run registry.py aruanne employee-trend --code 14532901
+uv run registry.py aruanne employee-trend --industry software
+```
+
+### 6. Analüüs
 ```bash
 uv run registry.py analüüs --by county --industry software
-uv run registry.py analüüs --by year --founded-after 2015-01-01
+uv run registry.py analüüs --by capital-range --industry software
+uv run registry.py analüüs --by employee-range
+uv run registry.py analüüs --by role
+uv run registry.py analüüs --by country
 ```
 
-### 5. Eksport
+### 7. Eksport
 ```bash
 uv run registry.py ekspordi ettevotted.csv --industry software --location Tallinn
+uv run registry.py ekspordi ettevotted.csv --has-email --min-capital 2500 --limit 100
 uv run registry.py ekspordi koik.json --limit 1000
 ```
 
-### 6. Otsing (detailne toimik)
+### 8. Otsing (detailne toimik)
 ```bash
 uv run registry.py otsi "Sunyata" --ownership --beneficiaries
 ```
 
-### 7. Rikastamine
+### 9. Rikastamine
 ```bash
 uv run registry.py rikasta 16631240
 ```
@@ -82,10 +120,13 @@ A business intelligence tool for the Estonian Business Registry. Download, searc
 - **Parallel & Resumable Downloads**: Fetches all registry files simultaneously using HTTP Range headers to resume interrupted downloads.
 - **SQLite Architecture**: Uses a local SQLite database for instant searches, complex filtering, and data enrichment.
 - **Dual-Language Support**: All commands and output available in both Estonian and English.
-- **Business-Friendly Search (`find`)**: Search companies by industry name, location, employee count, and founding date — no EMTAK codes required.
-- **Pre-Built Reports (`report`)**: One-command business intelligence reports: market overview, new companies, top industries, regional analysis, bankruptcies.
-- **Data Analysis (`analyze`)**: Group companies by county, status, legal form, EMTAK code, or founding year with filters.
-- **CSV Export**: Export filtered results to Excel-ready CSV with contacts, employee counts, and industry data.
+- **Business-Friendly Search (`find`)**: Search companies by industry, location, employee count, capital, contacts, and founding date.
+- **Person Search (`person`)**: Search board members, shareholders, and beneficiaries across all 366K companies. View a person's full network of company affiliations.
+- **Corporate Group Mapping (`group`)**: Recursive ownership chain mapping — find who owns a company (up), what subsidiaries it has (down), or both.
+- **Pre-Built Reports (`report`)**: One-command business intelligence: market overview, new companies, top industries, regional analysis, bankruptcies, employee trends.
+- **Data Analysis (`analyze`)**: Group companies by county, status, legal form, EMTAK code, founding year, capital range, employee range, person role, or beneficiary country.
+- **CSV Export**: Export filtered results to Excel-ready CSV with contacts, capital, VAT number, employee counts, and industry data.
+- **Contact & Capital Filters**: Filter by `--has-email`, `--has-website`, `--min-capital`, `--max-capital`, and `--growing` (rising headcount).
 - **Industry Name Mapping**: 70+ plain English industry names mapped to EMTAK codes. Includes typo suggestions.
 - **Exhaustive Dossiers**: Displays every piece of data from the registry, including name/address history, capital changes, and technical annotations.
 - **Beautiful Terminal UI**: Powered by `rich`, featuring formatted tables, trees for history, and syntax-highlighted JSON.
@@ -112,13 +153,19 @@ uv sync
 # 1. Download and merge registry data (~10 min first time)
 uv run registry.py sync
 
-# 2. Find software companies in Tallinn with 10+ employees
+# 2. Rebuild derived columns & person index (one-time, after first sync)
+uv run registry.py merge --force
+
+# 3. Find software companies in Tallinn with 10+ employees
 uv run registry.py --en find --industry software --location Tallinn --min-employees 10
 
-# 3. Get a market overview report
+# 4. Search for a person across all companies
+uv run registry.py --en person "Markus Villig" --network
+
+# 5. Get a market overview report
 uv run registry.py --en report market-overview
 
-# 4. Export construction companies to CSV
+# 6. Export construction companies to CSV
 uv run registry.py --en export construction.csv --industry construction
 ```
 
@@ -130,7 +177,7 @@ The tool supports commands in both Estonian and English. Use `--en` to force Eng
 Downloads and merges all registry files into the local database:
 ```bash
 uv run registry.py sync
-uv run registry.py merge --force   # Re-process all files
+uv run registry.py merge --force   # Re-process all files + rebuild derived columns & person index
 ```
 
 ### Find Companies (Business Search)
@@ -140,6 +187,16 @@ The `find` command is designed for non-technical users. It returns a compact sum
 uv run registry.py --en find --industry software --location Tallinn
 uv run registry.py --en find --industry "real estate" --founded-after 2023-01-01
 uv run registry.py --en find --industry restaurant --min-employees 5
+
+# Capital filters
+uv run registry.py --en find --industry software --min-capital 25000 --limit 10
+uv run registry.py --en find --min-capital 1000000    # Companies with 1M+ capital
+
+# Contact filters
+uv run registry.py --en find --industry software --has-email --has-website --limit 10
+
+# Growing companies (employee count increasing year-over-year)
+uv run registry.py --en find --industry software --growing --limit 20
 
 # By name or registry code
 uv run registry.py --en find "Bolt"
@@ -155,6 +212,36 @@ uv run registry.py --en find --industry construction --csv construction.csv
 Available `--industry` names include: `software`, `construction`, `restaurant`, `real estate`, `finance`, `healthcare`, `manufacturing`, `retail`, `transport`, `agriculture`, `energy`, `media`, and 60+ more. Use `--list-industries` to see all:
 ```bash
 uv run registry.py --list-industries --en
+```
+
+### Person Search
+Search board members, shareholders, and beneficiaries across all companies:
+```bash
+# Search by name
+uv run registry.py --en person "Markus Villig"
+
+# Search by ID code
+uv run registry.py --en person --id 14056464
+
+# Show full network (all companies a person is connected to)
+uv run registry.py --en person "Markus Villig" --network
+
+# Filter by role or source
+uv run registry.py --en person --role "Juhatuse liige" --limit 20
+uv run registry.py --en person --source shareholder --code 14532901
+```
+
+### Corporate Group Mapping
+Map ownership chains and corporate structures:
+```bash
+# Full ownership map (shareholders + subsidiaries)
+uv run registry.py --en group 14532901
+
+# Only shareholders (who owns this company)
+uv run registry.py --en group 14532901 --direction up
+
+# Only subsidiaries (what does this company own)
+uv run registry.py --en group 14532901 --direction down --depth 3
 ```
 
 ### Reports (Business Intelligence)
@@ -177,6 +264,10 @@ uv run registry.py --en report regional --county "Harju maakond"
 
 # Bankruptcies and liquidations
 uv run registry.py --en report bankruptcies --period 2024
+
+# Employee trends (single company or industry-wide)
+uv run registry.py --en report employee-trend --code 14532901
+uv run registry.py --en report employee-trend --industry software
 ```
 
 ### Analyze
@@ -196,6 +287,19 @@ uv run registry.py --en analyze --by year --founded-after 2010-01-01
 
 # Legal form distribution
 uv run registry.py --en analyze --by legal-form
+
+# Capital distribution
+uv run registry.py --en analyze --by capital-range
+uv run registry.py --en analyze --by capital-range --industry software
+
+# Employee size distribution
+uv run registry.py --en analyze --by employee-range --industry software
+
+# Person roles across companies
+uv run registry.py --en analyze --by role
+
+# Beneficiary countries
+uv run registry.py --en analyze --by country
 ```
 
 ### Search (Detailed Dossiers)
@@ -222,6 +326,9 @@ Export filtered company data to CSV or JSON:
 # CSV with flattened columns (Excel-ready, UTF-8 BOM)
 uv run registry.py --en export software_tallinn.csv --industry software --location Tallinn
 
+# With capital and contact filters
+uv run registry.py --en export leads.csv --industry software --has-email --min-capital 2500 --limit 100
+
 # JSON export
 uv run registry.py --en export all.json --limit 1000
 
@@ -229,10 +336,10 @@ uv run registry.py --en export all.json --limit 1000
 uv run registry.py --en export big_companies.csv --min-employees 100
 ```
 
-CSV columns: `code, name, status, county, city, legal_form, founded, main_industry_code, main_industry_name, employees, email, phone, website`
+CSV columns: `code, name, status, county, city, legal_form, founded, main_industry_code, main_industry_name, employees, capital, capital_currency, vat_number, email, phone, website`
 
 ### Statistics
-Quick overview of the database:
+Quick overview of the database, including coverage of all data dimensions:
 ```bash
 uv run registry.py --en stats
 ```
